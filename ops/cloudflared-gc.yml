@@ -1,0 +1,7 @@
+tunnel: 605ea1b3-4590-4337-8fe7-7d6427eb1663
+credentials-file: /home/smartdigital/.cloudflared/605ea1b3-4590-4337-8fe7-7d6427eb1663.json
+ingress:
+  - hostname: gc.tep2.in
+    service: http://127.0.0.1:8084
+  - service: http_status:404
+

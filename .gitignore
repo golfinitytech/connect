@@ -1,0 +1,119 @@
+# ======================================================
+# ENV & SECRETS
+# ======================================================
+.env
+.env.*
+!.env.example
+*.secret
+*.local
+firebase-service-account.json
+service-account.json
+credentials.json
+
+# ======================================================
+# DEPENDENCIES (ALL workspace + subfolders)
+# ======================================================
+node_modules/
+**/node_modules/
+.pnp
+.pnp.js
+.pnp.data.json
+.pnp.cjs
+.yarn/*
+!.yarn/patches
+!.yarn/releases
+!.yarn/plugins
+!.yarn/versions
+
+# ======================================================
+# BUILD OUTPUT
+# ======================================================
+dist/
+dist-ssr/
+build/
+coverage/
+.next/
+out/
+.output/
+.nuxt/
+.cache/
+.parcel-cache/
+.turbo/
+
+# ======================================================
+# LANGUAGE & SDK (JANGAN PERNAH MASUK GIT!)
+# ======================================================
+.jdk/
+.android-sdk/
+.android/
+.gradle/
+.m2/
+.rustup/
+.sdkman/
+.gem/
+.pyenv/
+.nvm/
+.npm/
+.config/
+.ssh/
+.local/
+
+# ======================================================
+# JAVA / ANDROID / KOTLIN / FLUTTER (build)
+# ======================================================
+apps/mobile/android/
+apps/mobile/ios/
+apps/mobile/*.jks
+apps/mobile/*.keystore
+apps/mobile/*.p12
+apps/mobile/*.mobileprovision
+apps/mobile/.expo/
+apps/mobile/expo-env.d.ts
+
+# ======================================================
+# CACHE & LOGS
+# ======================================================
+.vite/
+*.tsbuildinfo
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*.sw?
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# ======================================================
+# PRISMA
+# ======================================================
+prisma/migrations/_journal.json
+
+# ======================================================
+# DEVICE / INSTANCE FILES (server-local)
+# ======================================================
+server_config.json
+score-kiosk.json
+kiosk_*.json
+*.sqlite
+*.db
+
+# FIREBASE & GOOGLE CLOUD SECRETS (JANGAN MASUK GIT!)
+*firebase-adminsdk*.json
+*service-account*.json
+*credentials*.json
+*secret*.json
+google-services.json
+GoogleService-Info.plist
+golfinity-1f5a1-*.json

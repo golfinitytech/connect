@@ -1,0 +1,361 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum RoundStatus {
+  DRAFT
+  IN_PROGRESS
+  FINISHED
+}
+
+enum GameMode {
+  STROKE_PLAY
+  STABLEFORD
+  MATCH_PLAY
+}
+
+enum FairwayHit {
+  LEFT
+  CENTER
+  RIGHT
+}
+
+enum OrderStatus {
+  PENDING
+  PREPARING
+  ON_THE_WAY
+  DELIVERED
+  CANCELLED
+}
+
+enum NotificationCategory {
+  TOURNAMENT
+  ORDER
+  SOCIAL
+  SYSTEM
+}
+
+enum PrivacyMode {
+  PUBLIC
+  MEMBERS_ONLY
+  PRIVATE
+}
+
+model User {
+  id            String        @id @default(cuid())
+  email         String        @unique
+  fullName      String
+  password      String?
+  memberId      String        @unique
+  avatarUrl     String?
+  fcmToken      String?
+  handicapIndex Decimal       @db.Decimal(4, 1)
+  emailVerified DateTime?
+  lastLoginAt   DateTime?
+  lastSeenAt    DateTime?
+  lastSeenLat   Float?
+  lastSeenLng   Float?
+  facePhotoPath String?
+  facePhotoUpdatedAt DateTime?
+  verificationToken String?   @unique
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  roundPlayers  RoundPlayer[]
+  holeScores    HoleScore[]
+  orders        Order[]
+  eventRegistrations EventRegistration[]
+  notifications Notification[]
+  preference    UserPreference?
+  passwordResets PasswordReset[]
+}
+
+model PasswordReset {
+  id        String   @id @default(cuid())
+  email     String
+  token     String   @unique
+  expiresAt DateTime
+  used      Boolean  @default(false)
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [email], references: [email], onDelete: Cascade)
+
+  @@index([email])
+  @@index([token])
+}
+
+model Course {
+  id           String    @id @default(cuid())
+  name         String
+  city         String
+  country      String
+  imageUrl     String?
+  totalHoles   Int       @default(18)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  holes        Hole[]
+  teeBoxes     TeeBox[]
+  rounds       Round[]
+  events       Event[]
+}
+
+model Hole {
+  id        String   @id @default(cuid())
+  courseId  String
+  number    Int
+  par       Int
+  lengthYds Int
+  latitude  Float?
+  longitude Float?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  scores    HoleScore[]
+
+  @@unique([courseId, number])
+}
+
+model TeeBox {
+  id        String   @id @default(cuid())
+  courseId  String
+  name      String
+  yardage   Int
+  rating    Decimal  @db.Decimal(4, 1)
+  slope     Int
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  rounds    Round[]
+}
+
+model Round {
+  id             String        @id @default(cuid())
+  courseId       String
+  teeBoxId       String
+  gameMode       GameMode
+  status         RoundStatus   @default(DRAFT)
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  currentHole    Int           @default(1)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  course         Course        @relation(fields: [courseId], references: [id])
+  teeBox         TeeBox        @relation(fields: [teeBoxId], references: [id])
+  players        RoundPlayer[]
+  holeScores     HoleScore[]
+}
+
+model RoundPlayer {
+  id        String   @id @default(cuid())
+  roundId   String
+  userId    String
+  isOwner   Boolean  @default(false)
+  createdAt DateTime @default(now())
+  round     Round    @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roundId, userId])
+}
+
+model HoleScore {
+  id           String      @id @default(cuid())
+  roundId      String
+  holeId       String
+  userId       String
+  strokes      Int
+  putts        Int
+  fairwayHit   FairwayHit?
+  gir          Boolean?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  round        Round       @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  hole         Hole        @relation(fields: [holeId], references: [id], onDelete: Cascade)
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([roundId, holeId, userId])
+}
+
+model Event {
+  id          String    @id @default(cuid())
+  title       String
+  subtitle    String?
+  imageUrl    String?
+  startDate   DateTime
+  courseId    String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  course      Course    @relation(fields: [courseId], references: [id])
+  registrations EventRegistration[]
+}
+
+model EventRegistration {
+  id        String   @id @default(cuid())
+  eventId   String
+  userId    String
+  createdAt DateTime @default(now())
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+}
+
+model Notification {
+  id        String               @id @default(cuid())
+  userId    String
+  title     String
+  message   String
+  category  NotificationCategory
+  createdAt DateTime             @default(now())
+  readAt    DateTime?
+  user      User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+}
+
+model UserPreference {
+  id                   String      @id @default(cuid())
+  userId               String      @unique
+  notificationsEnabled Boolean     @default(true)
+  marketingEmails      Boolean     @default(false)
+  privacyMode          PrivacyMode @default(MEMBERS_ONLY)
+  createdAt            DateTime    @default(now())
+  updatedAt            DateTime    @updatedAt
+  user                 User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model MenuCategory {
+  id        String     @id @default(cuid())
+  name      String     @unique
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  items     MenuItem[]
+}
+
+model MenuItem {
+  id          String       @id @default(cuid())
+  categoryId  String
+  name        String
+  description String
+  price       Decimal      @db.Decimal(10, 2)
+  imageUrl    String?
+  isAvailable Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  category    MenuCategory @relation(fields: [categoryId], references: [id])
+  orderItems  OrderItem[]
+}
+
+model Order {
+  id          String           @id @default(cuid())
+  userId      String
+  roundId     String?
+  locationId  String?          // e.g. karawang, sulaiman, jatinangor
+  caddieCode  String?          // e.g. 139
+  holeNumber  Int?
+  status      OrderStatus      @default(PENDING)
+  subtotal    Decimal          @db.Decimal(10, 2)
+  serviceFee  Decimal          @db.Decimal(10, 2)
+  totalPaid   Decimal          @db.Decimal(10, 2)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items       OrderItem[]
+  statusLogs  OrderStatusLog[]
+}
+
+model OrderItem {
+  id         String   @id @default(cuid())
+  orderId    String
+  menuItemId String
+  quantity   Int      @default(1)
+  unitPrice  Decimal  @db.Decimal(10, 2)
+  createdAt  DateTime @default(now())
+  order      Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem   MenuItem @relation(fields: [menuItemId], references: [id])
+}
+
+model OrderStatusLog {
+  id        String      @id @default(cuid())
+  orderId   String
+  status    OrderStatus
+  note      String?
+  createdAt DateTime    @default(now())
+  order     Order       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+}
+
+model Tournament {
+  id            String            @id @default(cuid())
+  name          String
+  date          DateTime
+  course        String
+  teeBox        String
+  teeTime       String
+  rules         String
+  scoringMethod String
+  publishedAt   DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+  players       TournamentPlayer[]
+  groups        TournamentGroup[]
+}
+
+model TournamentPlayer {
+  id           String     @id @default(cuid())
+  tournamentId String
+  code         String?
+  name         String
+  dob          String?
+  shirtSize    String?
+  phone        String?
+  email        String?
+  handicap     Int
+  flight       String
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  groupId      String?
+  group        TournamentGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  @@unique([tournamentId, code])
+  @@index([code])
+}
+
+model TournamentGroup {
+  id           String             @id @default(cuid())
+  tournamentId String
+  code         String
+  flightType   String
+  caddieData   Json?
+  scoresData   Json?
+  createdAt    DateTime           @default(now())
+  tournament   Tournament         @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  players      TournamentPlayer[]
+
+  @@unique([tournamentId, code])
+  @@index([code])
+}
+
+model AdminNotification {
+  id                String   @id @default(cuid())
+  roleInfo          String
+  changedHole       Int
+  changedPlayerName String
+  newScore          Int
+  isApproved        Boolean  @default(false)
+  isMarshalEdit     Boolean  @default(false)
+  groupCode         String?
+  read              Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model CaddiePerformance {
+  id          String   @id @default(cuid())
+  locationId  String
+  caddieCode  String
+  playerName  String
+  date        DateTime @default(now())
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}

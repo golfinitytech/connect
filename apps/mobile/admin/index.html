@@ -1,0 +1,904 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Techno Golf Admin</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #06160e;
+        --card: rgba(255, 255, 255, 0.08);
+        --border: rgba(255, 255, 255, 0.12);
+        --text: rgba(255, 255, 255, 0.92);
+        --muted: rgba(255, 255, 255, 0.6);
+        --accent: #16d84e;
+        --accent2: #2df2ff;
+        --danger: #ff5a5f;
+      }
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji",
+          "Segoe UI Emoji";
+        background: radial-gradient(800px 600px at 20% -10%, rgba(22, 216, 78, 0.18), transparent),
+          radial-gradient(900px 700px at 110% 0%, rgba(255, 255, 255, 0.10), transparent),
+          var(--bg);
+        color: var(--text);
+      }
+      body::before {
+        content: '';
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background-image:
+          linear-gradient(rgba(255,255,255,0.035) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255,255,255,0.035) 1px, transparent 1px);
+        background-size: 42px 42px;
+        opacity: 0.35;
+        mask-image: radial-gradient(700px 380px at 50% 0%, black, transparent 70%);
+      }
+      .wrap {
+        max-width: none;
+        width: 100%;
+        margin: 0 auto;
+        padding: 28px 16px 40px;
+      }
+      .contentMax {
+        max-width: 1440px;
+        margin: 0 auto;
+      }
+      .top {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+      h1 {
+        margin: 0;
+        font-size: 24px;
+        font-weight: 900;
+        letter-spacing: -0.3px;
+        background: linear-gradient(90deg, rgba(255,255,255,0.96), rgba(22,216,78,0.92), rgba(45,242,255,0.85));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .sub {
+        margin-top: 6px;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .card {
+        margin-top: 18px;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 18px;
+        padding: 14px;
+        backdrop-filter: blur(10px);
+      }
+      .row {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .nav {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .controls {
+        display: grid;
+        grid-template-columns: 1fr 140px auto;
+        gap: 12px;
+        align-items: end;
+      }
+      .controlGroup {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        min-width: 0;
+      }
+      .controlActions {
+        display: flex;
+        gap: 10px;
+        align-items: end;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+      }
+      label {
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+      }
+      input {
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        color: var(--text);
+        border-radius: 12px;
+        padding: 10px 12px;
+        outline: none;
+        width: 100%;
+        min-width: 0;
+      }
+      button {
+        border: 0;
+        border-radius: 12px;
+        padding: 10px 14px;
+        background: var(--accent);
+        color: #072016;
+        font-weight: 900;
+        cursor: pointer;
+      }
+      button.secondary {
+        background: rgba(255, 255, 255, 0.12);
+        color: var(--text);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+      }
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+      .status {
+        margin-top: 10px;
+        font-size: 13px;
+        color: var(--muted);
+        font-weight: 700;
+      }
+      .status.error {
+        color: var(--danger);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 12px;
+        overflow: hidden;
+        border-radius: 14px;
+      }
+      th,
+      td {
+        padding: 12px 10px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+        text-align: left;
+        font-size: 13px;
+      }
+      th {
+        color: rgba(255, 255, 255, 0.72);
+        font-weight: 900;
+        font-size: 12px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        background: rgba(255, 255, 255, 0.06);
+      }
+      tr:hover td {
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .pill {
+        display: inline-flex;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        background: rgba(255, 255, 255, 0.06);
+        font-weight: 800;
+        font-size: 12px;
+      }
+      .pillButton {
+        appearance: none;
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        color: rgba(255, 255, 255, 0.86);
+        display: inline-flex;
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-weight: 800;
+        font-size: 12px;
+        cursor: pointer;
+      }
+      .smallBtn {
+        appearance: none;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        background: rgba(255, 255, 255, 0.10);
+        color: rgba(255, 255, 255, 0.92);
+        padding: 8px 10px;
+        border-radius: 10px;
+        font-weight: 900;
+        font-size: 12px;
+      }
+      .smallBtn:hover {
+        background: rgba(255, 255, 255, 0.14);
+      }
+      .actionRow {
+        display: inline-flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .smallBtn.secondaryBtn {
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(255, 255, 255, 0.14);
+      }
+      .modalOverlay {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.6);
+        display: none;
+        align-items: center;
+        justify-content: center;
+        padding: 16px;
+        z-index: 9999;
+      }
+      .modalOverlay.open {
+        display: flex;
+      }
+      .modal {
+        width: 100%;
+        max-width: 520px;
+        background: #072016;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 18px;
+        padding: 14px;
+      }
+      .modalHeader {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+      }
+      .modalTitle {
+        margin: 0;
+        font-size: 16px;
+        font-weight: 900;
+        letter-spacing: -0.2px;
+      }
+      .modalBody {
+        margin-top: 12px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .modalMeta {
+        color: rgba(255, 255, 255, 0.7);
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.35;
+      }
+      .modalActions {
+        margin-top: 14px;
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+      }
+      .faceWrap {
+        width: 44px;
+        height: 44px;
+        border-radius: 14px;
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.06);
+        position: relative;
+        flex: 0 0 auto;
+      }
+      .faceImg {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: none;
+      }
+      .facePlaceholder {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: rgba(255, 255, 255, 0.7);
+        font-weight: 900;
+        font-size: 10px;
+        letter-spacing: 0.5px;
+        text-transform: uppercase;
+        padding: 6px;
+        text-align: center;
+      }
+      a {
+        color: rgba(255, 255, 255, 0.86);
+      }
+
+      @media (max-width: 860px) {
+        .wrap {
+          padding: 22px 14px 36px;
+        }
+        h1 {
+          font-size: 22px;
+        }
+      }
+
+      @media (max-width: 760px) {
+        .controls {
+          grid-template-columns: 1fr;
+        }
+        .controlActions {
+          justify-content: stretch;
+        }
+        .controlActions button {
+          width: 100%;
+        }
+      }
+
+      @media (max-width: 920px) {
+        table thead {
+          display: none;
+        }
+        table,
+        tbody,
+        tr,
+        td {
+          display: block;
+          width: 100%;
+        }
+        table {
+          border-radius: 0;
+          margin-top: 10px;
+        }
+        tbody tr {
+          border: 1px solid rgba(255, 255, 255, 0.12);
+          border-radius: 16px;
+          overflow: hidden;
+          background: rgba(255, 255, 255, 0.06);
+          margin-top: 12px;
+        }
+        tbody tr:hover td {
+          background: transparent;
+        }
+        td {
+          padding: 12px 12px;
+          border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          align-items: center;
+        }
+        td:last-child {
+          border-bottom: 0;
+        }
+        td::before {
+          content: attr(data-label);
+          color: rgba(255, 255, 255, 0.68);
+          font-weight: 900;
+          font-size: 11px;
+          letter-spacing: 0.6px;
+          text-transform: uppercase;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="contentMax">
+      <div class="top">
+        <div>
+          <h1>Techno Golf Admin</h1>
+          <div class="sub">Monitoring user login, status, dan lokasi realtime.</div>
+        </div>
+        <div class="nav">
+          <a class="pill" href="/" rel="noopener">Back to App</a>
+          <a class="pill" href="#users" rel="noopener">Daftar User</a>
+        </div>
+      </div>
+
+      <div class="card" id="users">
+        <div class="controls">
+          <div class="controlGroup">
+            <label for="token">Admin Token</label>
+            <input id="token" type="password" placeholder="Masukkan admin token" autocomplete="current-password" />
+          </div>
+          <div class="controlGroup">
+            <label for="limit">Limit</label>
+            <input id="limit" type="number" min="1" max="1000" value="200" />
+          </div>
+          <div class="controlActions">
+            <button id="refresh">Refresh</button>
+            <button id="logout" class="secondary">Clear Token</button>
+          </div>
+        </div>
+        <div id="status" class="status"></div>
+        <div style="overflow:auto;">
+          <table>
+            <thead>
+              <tr>
+                <th>Foto</th>
+                <th>Nama</th>
+                <th>Email</th>
+                <th>Member ID</th>
+                <th>Handicap</th>
+                <th>Status</th>
+                <th>Lokasi</th>
+                <th>Terakhir Login</th>
+                <th>Terdaftar</th>
+                <th>Email Verified</th>
+                <th>Aksi</th>
+              </tr>
+            </thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+      </div>
+      </div>
+    </div>
+
+    <div class="modalOverlay" id="pwModal">
+      <div class="modal">
+        <div class="modalHeader">
+          <h2 class="modalTitle">Edit Password</h2>
+          <button class="pillButton" id="pwClose">Close</button>
+        </div>
+        <div class="modalBody">
+          <div class="modalMeta" id="pwUserMeta"></div>
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <label for="pwNew">New Password</label>
+            <input id="pwNew" type="password" placeholder="Min 8 karakter" autocomplete="new-password" />
+          </div>
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <label for="pwConfirm">Confirm Password</label>
+            <input id="pwConfirm" type="password" placeholder="Ulangi password" autocomplete="new-password" />
+          </div>
+          <div id="pwStatus" class="status"></div>
+          <div class="modalActions">
+            <button class="secondary" id="pwCancel">Cancel</button>
+            <button id="pwSave">Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const API_BASE = 'https://api-gc.tep2.in/api';
+      const tokenInput = document.getElementById('token');
+      const limitInput = document.getElementById('limit');
+      const refreshBtn = document.getElementById('refresh');
+      const logoutBtn = document.getElementById('logout');
+      const statusEl = document.getElementById('status');
+      const tbody = document.getElementById('tbody');
+      const pwModal = document.getElementById('pwModal');
+      const pwClose = document.getElementById('pwClose');
+      const pwCancel = document.getElementById('pwCancel');
+      const pwSave = document.getElementById('pwSave');
+      const pwNew = document.getElementById('pwNew');
+      const pwConfirm = document.getElementById('pwConfirm');
+      const pwStatus = document.getElementById('pwStatus');
+      const pwUserMeta = document.getElementById('pwUserMeta');
+      let currentUserId = null;
+      let autoRefreshIntervalId = null;
+      let statusTickIntervalId = null;
+      let lastUsers = [];
+      const faceObjectUrls = new Map();
+
+      const savedToken = localStorage.getItem('adminToken');
+      if (savedToken) tokenInput.value = savedToken;
+
+      function setStatus(msg, isError) {
+        statusEl.textContent = msg || '';
+        statusEl.className = 'status' + (isError ? ' error' : '');
+      }
+
+      function setPwStatus(msg, isError) {
+        pwStatus.textContent = msg || '';
+        pwStatus.className = 'status' + (isError ? ' error' : '');
+      }
+
+      function fmtDate(value) {
+        if (!value) return '-';
+        const d = new Date(value);
+        if (Number.isNaN(d.getTime())) return '-';
+        return d.toLocaleString();
+      }
+
+      function isOnline(lastSeenAt) {
+        if (!lastSeenAt) return false;
+        const d = new Date(lastSeenAt);
+        if (Number.isNaN(d.getTime())) return false;
+        return Date.now() - d.getTime() <= 2 * 60 * 1000;
+      }
+
+      function setStatusPill(el, online) {
+        if (!el) return;
+        el.textContent = online ? 'ONLINE' : 'OFFLINE';
+        el.style.borderColor = online ? 'rgba(22,216,78,0.45)' : 'rgba(255,255,255,0.16)';
+        el.style.background = online ? 'rgba(22,216,78,0.14)' : 'rgba(255,255,255,0.06)';
+        el.style.color = online ? 'rgba(220,255,235,0.96)' : 'rgba(255,255,255,0.78)';
+      }
+
+      function updateStatusBadges() {
+        const pills = tbody.querySelectorAll('[data-role="status-pill"]');
+        pills.forEach((el) => {
+          const lastSeenAt = el.getAttribute('data-lastseen');
+          setStatusPill(el, isOnline(lastSeenAt));
+        });
+      }
+
+      function escapeHtml(s) {
+        return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+      }
+
+      function mapsUrl(lat, lng) {
+        if (typeof lat !== 'number' || typeof lng !== 'number') return null;
+        return `https://www.google.com/maps?q=${encodeURIComponent(String(lat))},${encodeURIComponent(String(lng))}`;
+      }
+
+      function revokeFaceUrls() {
+        for (const url of faceObjectUrls.values()) {
+          try {
+            URL.revokeObjectURL(url);
+          } catch {}
+        }
+        faceObjectUrls.clear();
+      }
+
+      async function loadFacePhotos(users) {
+        const token = tokenInput.value.trim();
+        if (!token) return;
+
+        const targets = users.filter((u) => !!u.facePhotoUpdatedAt);
+        if (!targets.length) return;
+
+        await Promise.all(
+          targets.map(async (u) => {
+            const img = tbody.querySelector(`[data-role="face-img"][data-user-id="${u.id}"]`);
+            const placeholder = tbody.querySelector(
+              `[data-role="face-placeholder"][data-user-id="${u.id}"]`,
+            );
+            if (!img) return;
+            if (img.getAttribute('data-loaded') === '1') return;
+
+            try {
+              const res = await fetch(`${API_BASE}/admin/users/${encodeURIComponent(u.id)}/face-photo`, {
+                method: 'GET',
+                headers: {
+                  'X-Admin-Token': token,
+                },
+              });
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              const blob = await res.blob();
+              const url = URL.createObjectURL(blob);
+              faceObjectUrls.set(u.id, url);
+              img.src = url;
+              img.style.display = 'block';
+              img.setAttribute('data-loaded', '1');
+              if (placeholder) placeholder.style.display = 'none';
+            } catch {
+              if (placeholder) placeholder.textContent = '—';
+            }
+          }),
+        );
+      }
+
+      function renderUsers(users) {
+        const rows = users
+          .map((u) => {
+            const online = isOnline(u.lastSeenAt);
+            const lastSeen = u.lastSeenAt ? String(u.lastSeenAt) : '';
+            const lat = typeof u.lastSeenLat === 'number' ? u.lastSeenLat : null;
+            const lng = typeof u.lastSeenLng === 'number' ? u.lastSeenLng : null;
+            const map = mapsUrl(lat, lng);
+            const hasFace = !!u.facePhotoUpdatedAt;
+            return `<tr>
+              <td data-label="Foto">
+                <div class="faceWrap">
+                  <div class="facePlaceholder" data-role="face-placeholder" data-user-id="${escapeHtml(u.id)}">${hasFace ? 'Loading…' : '—'}</div>
+                  <img class="faceImg" data-role="face-img" data-user-id="${escapeHtml(u.id)}" alt="Face" />
+                </div>
+              </td>
+              <td data-label="Nama">${escapeHtml(u.fullName || '-')}</td>
+              <td data-label="Email">${escapeHtml(u.email || '-')}</td>
+              <td data-label="Member ID">${escapeHtml(u.memberId || '-')}</td>
+              <td data-label="Handicap">${escapeHtml(u.handicapIndex ?? '-')}</td>
+              <td data-label="Status"><span class="pill" data-role="status-pill" data-lastseen="${escapeHtml(lastSeen)}" style="border-color:${online ? 'rgba(22,216,78,0.45)' : 'rgba(255,255,255,0.16)'};background:${online ? 'rgba(22,216,78,0.14)' : 'rgba(255,255,255,0.06)'};color:${online ? 'rgba(220,255,235,0.96)' : 'rgba(255,255,255,0.78)'};">${online ? 'ONLINE' : 'OFFLINE'}</span></td>
+              <td data-label="Lokasi">${map ? `<a href="${escapeHtml(map)}" target="_blank" rel="noopener">Open Map</a>` : '-'}</td>
+              <td data-label="Terakhir Login">${escapeHtml(fmtDate(u.lastLoginAt))}</td>
+              <td data-label="Terdaftar">${escapeHtml(fmtDate(u.createdAt))}</td>
+              <td data-label="Verified">${u.emailVerified ? 'YES' : 'NO'}</td>
+              <td data-label="Aksi">
+                <div class="actionRow">
+                  <button class="smallBtn" data-action="edit-password" data-user-id="${escapeHtml(u.id)}" data-user-name="${escapeHtml(u.fullName || '')}" data-user-email="${escapeHtml(u.email || '')}" data-user-memberid="${escapeHtml(u.memberId || '')}">Edit</button>
+                  <button class="smallBtn secondaryBtn" data-action="upload-face" data-user-id="${escapeHtml(u.id)}" data-user-name="${escapeHtml(u.fullName || '')}" data-user-email="${escapeHtml(u.email || '')}" data-user-memberid="${escapeHtml(u.memberId || '')}">Upload Face</button>
+                </div>
+              </td>
+            </tr>`;
+          })
+          .join('');
+        tbody.innerHTML = rows;
+      }
+
+      function openPwModal(user) {
+        currentUserId = user.id;
+        pwUserMeta.innerHTML = `<div><span class="pill">${escapeHtml(user.fullName || '-')}</span></div>
+          <div style="margin-top:8px;">${escapeHtml(user.email || '-')} · ${escapeHtml(user.memberId || '-')}</div>`;
+        pwNew.value = '';
+        pwConfirm.value = '';
+        setPwStatus('', false);
+        pwModal.classList.add('open');
+        pwNew.focus();
+      }
+
+      function closePwModal() {
+        currentUserId = null;
+        pwModal.classList.remove('open');
+        setPwStatus('', false);
+      }
+
+      async function loadUsers() {
+        const token = tokenInput.value.trim();
+        const limit = Math.min(Math.max(parseInt(limitInput.value || '200', 10) || 200, 1), 1000);
+        if (!token) {
+          setStatus('Masukkan Admin Token dulu.', true);
+          return;
+        }
+        localStorage.setItem('adminToken', token);
+
+        refreshBtn.disabled = true;
+        setStatus('Loading...', false);
+
+        try {
+          const res = await fetch(`${API_BASE}/admin/users?limit=${encodeURIComponent(String(limit))}`, {
+            method: 'GET',
+            headers: {
+              'X-Admin-Token': token,
+              'Accept': 'application/json',
+            },
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || `HTTP ${res.status}`);
+          }
+          const data = await res.json();
+          const users = Array.isArray(data.users) ? data.users : [];
+          lastUsers = users;
+
+          if (!users.length) {
+            tbody.innerHTML = '';
+            setStatus('Tidak ada user dengan lastLoginAt.', false);
+            return;
+          }
+
+          revokeFaceUrls();
+          renderUsers(users);
+          updateStatusBadges();
+          await loadFacePhotos(users);
+          setStatus(`OK. Total: ${users.length}`, false);
+        } catch (e) {
+          setStatus(`Error: ${e.message || e}`, true);
+        } finally {
+          refreshBtn.disabled = false;
+        }
+      }
+
+      function stopAutoRefresh() {
+        if (autoRefreshIntervalId) {
+          clearInterval(autoRefreshIntervalId);
+          autoRefreshIntervalId = null;
+        }
+        if (statusTickIntervalId) {
+          clearInterval(statusTickIntervalId);
+          statusTickIntervalId = null;
+        }
+        revokeFaceUrls();
+      }
+
+      function startAutoRefresh() {
+        stopAutoRefresh();
+
+        const token = tokenInput.value.trim();
+        if (!token) return;
+
+        statusTickIntervalId = setInterval(() => {
+          if (document.visibilityState !== 'visible') return;
+          updateStatusBadges();
+        }, 5000);
+
+        autoRefreshIntervalId = setInterval(() => {
+          if (document.visibilityState !== 'visible') return;
+          if (pwModal.classList.contains('open')) return;
+          loadUsers();
+        }, 15000);
+      }
+
+      async function updatePassword(userId, newPassword) {
+        const token = tokenInput.value.trim();
+        if (!token) throw new Error('Admin token required');
+
+        const res = await fetch(`${API_BASE}/admin/users/${encodeURIComponent(userId)}/password`, {
+          method: 'POST',
+          headers: {
+            'X-Admin-Token': token,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify({ newPassword }),
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || `HTTP ${res.status}`);
+        }
+        return res.json();
+      }
+
+      async function uploadFacePhoto(userId, imageBase64) {
+        const token = tokenInput.value.trim();
+        if (!token) throw new Error('Admin token required');
+        const res = await fetch(`${API_BASE}/admin/users/${encodeURIComponent(userId)}/face-photo`, {
+          method: 'POST',
+          headers: {
+            'X-Admin-Token': token,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+          },
+          body: JSON.stringify({ imageBase64 }),
+        });
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || `HTTP ${res.status}`);
+        }
+        return res.json();
+      }
+
+      async function compressImageDataUrl(dataUrl) {
+        if (!dataUrl || typeof dataUrl !== 'string') return dataUrl;
+        if (!dataUrl.startsWith('data:image/')) return dataUrl;
+
+        const img = new Image();
+        img.decoding = 'async';
+        img.src = dataUrl;
+        await new Promise((resolve, reject) => {
+          img.onload = resolve;
+          img.onerror = () => reject(new Error('Failed to load image'));
+        });
+
+        const maxDim = 720;
+        const w = img.naturalWidth || img.width;
+        const h = img.naturalHeight || img.height;
+        if (!w || !h) return dataUrl;
+
+        const scale = Math.min(1, maxDim / Math.max(w, h));
+        const outW = Math.max(1, Math.round(w * scale));
+        const outH = Math.max(1, Math.round(h * scale));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = outW;
+        canvas.height = outH;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return dataUrl;
+        ctx.drawImage(img, 0, 0, outW, outH);
+
+        const jpeg = canvas.toDataURL('image/jpeg', 0.82);
+        return jpeg || dataUrl;
+      }
+
+      function pickFaceFile(user) {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.style.display = 'none';
+        document.body.appendChild(input);
+
+        input.addEventListener('change', async () => {
+          const file = input.files && input.files[0] ? input.files[0] : null;
+          document.body.removeChild(input);
+          if (!file) return;
+
+          refreshBtn.disabled = true;
+          setStatus(`Uploading face for ${user.fullName || user.email || user.id}...`, false);
+
+          try {
+            const dataUrl = await new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onerror = () => reject(new Error('Failed to read file'));
+              reader.onload = () => resolve(String(reader.result || ''));
+              reader.readAsDataURL(file);
+            });
+            const compressed = await compressImageDataUrl(dataUrl);
+            await uploadFacePhoto(user.id, compressed);
+            await loadUsers();
+            setStatus('Face photo uploaded.', false);
+          } catch (err) {
+            setStatus(`Error: ${err.message || err}`, true);
+          } finally {
+            refreshBtn.disabled = false;
+          }
+        });
+
+        input.click();
+      }
+
+      tbody.addEventListener('click', (e) => {
+        const btn = e.target && e.target.closest ? e.target.closest('button[data-action]') : null;
+        if (!btn) return;
+        const action = btn.getAttribute('data-action');
+        const user = {
+          id: btn.getAttribute('data-user-id'),
+          fullName: btn.getAttribute('data-user-name'),
+          email: btn.getAttribute('data-user-email'),
+          memberId: btn.getAttribute('data-user-memberid'),
+        };
+        if (!user.id) return;
+        if (action === 'edit-password') {
+          openPwModal(user);
+          return;
+        }
+        if (action === 'upload-face') {
+          pickFaceFile(user);
+          return;
+        }
+      });
+
+      pwClose.addEventListener('click', (e) => {
+        e.preventDefault();
+        closePwModal();
+      });
+      pwCancel.addEventListener('click', (e) => {
+        e.preventDefault();
+        closePwModal();
+      });
+      pwModal.addEventListener('click', (e) => {
+        if (e.target === pwModal) closePwModal();
+      });
+      pwSave.addEventListener('click', async (e) => {
+        e.preventDefault();
+        if (!currentUserId) return;
+        const p1 = pwNew.value;
+        const p2 = pwConfirm.value;
+        if (!p1 || p1.length < 8) {
+          setPwStatus('Password minimal 8 karakter.', true);
+          return;
+        }
+        if (p1 !== p2) {
+          setPwStatus('Confirm password tidak sama.', true);
+          return;
+        }
+        pwSave.disabled = true;
+        setPwStatus('Saving...', false);
+        try {
+          await updatePassword(currentUserId, p1);
+          setPwStatus('Password berhasil diubah.', false);
+          setTimeout(() => closePwModal(), 450);
+        } catch (err) {
+          setPwStatus(`Error: ${err.message || err}`, true);
+        } finally {
+          pwSave.disabled = false;
+        }
+      });
+
+      refreshBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        loadUsers();
+      });
+      logoutBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        localStorage.removeItem('adminToken');
+        tokenInput.value = '';
+        tbody.innerHTML = '';
+        setStatus('Token dihapus.', false);
+        stopAutoRefresh();
+      });
+      tokenInput.addEventListener('input', () => {
+        const token = tokenInput.value.trim();
+        if (!token) {
+          stopAutoRefresh();
+        } else {
+          startAutoRefresh();
+        }
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'visible') return;
+        updateStatusBadges();
+      });
+
+      if (tokenInput.value.trim()) {
+        loadUsers();
+        startAutoRefresh();
+      }
+    </script>
+  </body>
+</html>

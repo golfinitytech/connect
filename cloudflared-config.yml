@@ -1,0 +1,19 @@
+tunnel: 605ea1b3-4590-4337-8fe7-7d6427eb1663
+credentials-file: /home/smartdigital/.cloudflared/605ea1b3-4590-4337-8fe7-7d6427eb1663.json
+
+protocol: http2
+
+ingress:
+  - hostname: api-gc.tep2.in
+    service: http://localhost:3002
+    originRequest:
+      noTLSVerify: true
+  - hostname: gc-connect.tep2.in
+    service: http://localhost:8084
+    originRequest:
+      noTLSVerify: true
+  - hostname: gc.tep2.in
+    service: http://localhost:8085
+    originRequest:
+      noTLSVerify: true
+  - service: http_status:404

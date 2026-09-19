@@ -1,0 +1,25 @@
+{
+  "name": "golfinity-connect",
+  "version": "1.0.0",
+  "scripts": {
+    "dev:api": "npm -w apps/api run start:dev",
+    "dev:mobile": "npm -w apps/mobile run start",
+    "build": "npm -ws run build",
+    "prisma:generate": "npm -w apps/api run prisma:generate",
+    "prisma:migrate": "npm -w apps/api run prisma:migrate",
+    "postinstall": "patch-package"
+  },
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20.19.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "patch-package": "^8.0.0",
+    "pm2": "^7.0.1"
+  }
+}
