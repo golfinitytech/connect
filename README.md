@@ -6,14 +6,14 @@ Monorepo for the Golfinity Connect mobile app and backend.
 
 - `apps/mobile`: React Native (Expo + TypeScript)
 - `apps/api`: NestJS + Prisma
-- Database: MySQL 8
+- Database: PostgreSQL on Supabase (local Postgres via Docker optional)
 - Cache/realtime support: Redis
 
 ## Requirements
 
 - Node.js `>= 20.19.4`
 - npm `>= 10`
-- Docker (for MySQL + Redis)
+- A Supabase project (or Docker for a local Postgres)
 
 If Node is not preinstalled, a local runtime can be used:
 
@@ -42,10 +42,12 @@ Create mobile env file:
 cp apps/mobile/.env.example apps/mobile/.env
 ```
 
-2. Start infra:
+2. Database: fill `DATABASE_URL` and `DIRECT_URL` in `apps/api/.env` with the Supabase
+   connection strings (Supabase dashboard → **Connect** → ORMs → Prisma).
+   For offline development you can use a local Postgres instead:
 
 ```bash
-docker compose up -d
+docker compose up -d   # then use the local URLs commented in .env.example
 ```
 
 3. Install dependencies (already done in this environment):
@@ -54,11 +56,11 @@ docker compose up -d
 npm install
 ```
 
-4. Generate Prisma client and run migration:
+4. Create the tables and generate the Prisma client:
 
 ```bash
+npm run prisma:push
 npm run prisma:generate
-npm run prisma:migrate -- --name init
 ```
 
 5. Seed sample data:
@@ -153,7 +155,7 @@ Seed now includes full demo data matching design scenarios:
 After changing schema:
 
 ```bash
-npm -w apps/api run prisma:migrate -- --name <migration_name>
-npm -w apps/api run prisma:seed
+npm run prisma:push
+npm -w apps/api run prisma:seed   # only on an empty/dev database
 ```
 # golfinity-connect

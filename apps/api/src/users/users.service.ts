@@ -10,8 +10,8 @@ export class UsersService {
       where: search
         ? {
             OR: [
-              { fullName: { contains: search } },
-              { memberId: { contains: search } },
+              { fullName: { contains: search, mode: 'insensitive' } },
+              { memberId: { contains: search, mode: 'insensitive' } },
             ],
           }
         : undefined,
@@ -30,7 +30,10 @@ export class UsersService {
   }
 
   async findByEmail(email: string) {
-    return this.prisma.user.findUnique({ where: { email } });
+    // Postgres compares text case-sensitively (MySQL didn't), so match emails case-insensitively.
+    return this.prisma.user.findFirst({
+      where: { email: { equals: (email || '').trim(), mode: 'insensitive' } },
+    });
   }
 
   async findByMemberId(memberId: string) {

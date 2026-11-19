@@ -1,9 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { Trophy, Activity, Users, Clock, Maximize, Crown } from 'lucide-react';
+import api from '../services/api';
+
+// Only scores confirmed by the player (or set by a marshal) count, same as the official ranking.
+const isConfirmed = (player: any, nine: 'IN' | 'OUT', idx: number) =>
+  !!(player?.approvals?.[nine]?.[idx] || player?.marshalEdited?.[nine]?.[idx]);
 
 const MonitoringScoreTournament = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [filterMode, setFilterMode] = useState<'Group' | 'Flight' | 'Overall' | 'FlightA' | 'FlightB' | 'FlightC'>('Overall');
+  const [serverBoard, setServerBoard] = useState<{ pars: number[]; byPlayer: Record<string, any>; order: Record<string, number> } | null>(null);
   const [allPlayersData, setAllPlayersData] = useState<any[]>([]);
   const [expandedPlayerId, setExpandedPlayerId] = useState<string | number | null>(null);
   const [tournamentName, setTournamentName] = useState<string>('');
@@ -37,6 +43,11 @@ const MonitoringScoreTournament = () => {
       { num: 16, par: 3 }, { num: 17, par: 5 }, { num: 18, par: 4 },
     ]
   };
+  if (serverBoard?.pars?.length === 18) {
+    (['IN', 'OUT'] as const).forEach((n) => {
+      holeData[n] = holeData[n].map((h: any) => ({ ...h, par: serverBoard.pars[h.num - 1] ?? h.par }));
+    });
+  }
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -47,10 +58,25 @@ const MonitoringScoreTournament = () => {
   }, []);
 
   useEffect(() => {
-    const fetchLatestData = async () => {
+    const fetchServerBoard = async () => {
       try {
-        // @ts-ignore
-        const { default: api } = await import('../services/api');
+        const res = await api.get('/tournaments/active/leaderboard');
+        if (!res.data?.entries) return setServerBoard(null);
+        const byPlayer: Record<string, any> = {};
+        const order: Record<string, number> = {};
+        res.data.entries.forEach((e: any, i: number) => {
+          byPlayer[e.playerId] = e;
+          order[e.playerId] = i;
+        });
+        setServerBoard({ pars: res.data.tournament.pars, byPlayer, order });
+      } catch (err) {
+        console.warn('Failed to fetch server leaderboard:', err);
+      }
+    };
+
+    const fetchLatestData = async () => {
+      fetchServerBoard();
+      try {
         const response = await api.get('/tournaments/active');
         if (response.data && response.data.groups) {
           const tournament = response.data;
@@ -126,7 +152,7 @@ const MonitoringScoreTournament = () => {
 
     if (player.scores.IN) {
       player.scores.IN.forEach((score: any, idx: number) => {
-        if (typeof score === 'number' && score > 0 && holeData.IN[idx]) {
+        if (isConfirmed(player, 'IN', idx) && typeof score === 'number' && score > 0 && holeData.IN[idx]) {
           totalStrokes += score;
           totalPar += holeData.IN[idx].par;
         }
@@ -135,7 +161,7 @@ const MonitoringScoreTournament = () => {
 
     if (player.scores.OUT) {
       player.scores.OUT.forEach((score: any, idx: number) => {
-        if (typeof score === 'number' && score > 0 && holeData.OUT[idx]) {
+        if (isConfirmed(player, 'OUT', idx) && typeof score === 'number' && score > 0 && holeData.OUT[idx]) {
           totalStrokes += score;
           totalPar += holeData.OUT[idx].par;
         }
@@ -156,8 +182,8 @@ const MonitoringScoreTournament = () => {
 
   const getTotalScore = (player: any) => {
     if (!player.scores) return player.manualTotal || 0;
-    const inTotal = player.scores.IN ? player.scores.IN.reduce((acc: number, curr: any) => acc + (typeof curr === 'number' ? curr : 0), 0) : 0;
-    const outTotal = player.scores.OUT ? player.scores.OUT.reduce((acc: number, curr: any) => acc + (typeof curr === 'number' ? curr : 0), 0) : 0;
+    const inTotal = player.scores.IN ? player.scores.IN.reduce((acc: number, curr: any, idx: number) => acc + (isConfirmed(player, 'IN', idx) && typeof curr === 'number' ? curr : 0), 0) : 0;
+    const outTotal = player.scores.OUT ? player.scores.OUT.reduce((acc: number, curr: any, idx: number) => acc + (isConfirmed(player, 'OUT', idx) && typeof curr === 'number' ? curr : 0), 0) : 0;
     
     const calculatedTotal = inTotal + outTotal;
     if (calculatedTotal === 0 && player.manualTotal) {
@@ -168,8 +194,8 @@ const MonitoringScoreTournament = () => {
 
   const getHoleProgress = (player: any) => {
     if (!player.scores) return 0;
-    const inPlayed = player.scores.IN ? player.scores.IN.filter((s: any) => typeof s === 'number' && s > 0).length : 0;
-    const outPlayed = player.scores.OUT ? player.scores.OUT.filter((s: any) => typeof s === 'number' && s > 0).length : 0;
+    const inPlayed = player.scores.IN ? player.scores.IN.filter((s: any, idx: number) => isConfirmed(player, 'IN', idx) && typeof s === 'number' && s > 0).length : 0;
+    const outPlayed = player.scores.OUT ? player.scores.OUT.filter((s: any, idx: number) => isConfirmed(player, 'OUT', idx) && typeof s === 'number' && s > 0).length : 0;
     return inPlayed + outPlayed;
   };
 
@@ -205,6 +231,9 @@ const MonitoringScoreTournament = () => {
       };
     })
     .sort((a, b) => {
+      const oa = serverBoard?.order?.[a.id];
+      const ob = serverBoard?.order?.[b.id];
+      if (oa !== undefined && ob !== undefined) return oa - ob;
       if (a.isOut && !b.isOut) return 1;
       if (!a.isOut && b.isOut) return -1;
       
@@ -256,6 +285,12 @@ const MonitoringScoreTournament = () => {
     return () => clearInterval(scrollInterval);
   }, [sortedPlayers.length, expandedPlayerId]);
 
+
+  const rankLabel = (player: any, idx: number) => {
+    const e = serverBoard?.byPlayer?.[player.id];
+    if (e) return ['FlightA', 'FlightB', 'FlightC', 'Flight'].includes(filterMode) ? e.categoryPositionLabel : e.positionLabel;
+    return player.isOut ? '-' : idx + 1;
+  };
   return (
     <div className="w-full h-screen bg-[#000a20] overflow-hidden flex flex-col font-sans relative">
       <div className="absolute inset-0 bg-gradient-to-br from-blue-900/20 via-transparent to-black/40 pointer-events-none" />
@@ -393,7 +428,7 @@ const MonitoringScoreTournament = () => {
                       idx === 1 ? 'text-slate-300' : 
                       idx === 2 ? 'text-orange-400' : 
                       'text-white'}`}>
-                      {player.isOut ? '-' : idx + 1}
+                      {rankLabel(player, idx)}
                     </span>
                   </div>
 
@@ -455,7 +490,7 @@ const MonitoringScoreTournament = () => {
                       >
                         <div className="w-12 md:w-16 lg:w-20 flex items-center">
                           <span className={`text-2xl font-black italic ${player.isOut ? 'text-orange-400/50' : 'text-white'}`}>
-                            {player.isOut ? '-' : idx + 1}
+                            {rankLabel(player, idx)}
                           </span>
                         </div>
 
@@ -584,7 +619,7 @@ const MonitoringScoreTournament = () => {
                     >
                       <div className="w-12 md:w-16 lg:w-20 flex items-center">
                         <span className={`text-xl font-black italic ${player.isOut ? 'text-orange-400/50' : 'text-white'}`}>
-                          {player.isOut ? '-' : idx + 1}
+                          {rankLabel(player, idx)}
                         </span>
                       </div>
 

@@ -3,7 +3,6 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import LeaderboardModal from '../components/LeaderboardModal';
 import { 
-  QrCode, 
   Search, 
   ChevronLeft, 
   User, 
@@ -21,7 +20,11 @@ const TournamentPlayerSelection = () => {
   const location = useLocation();
   const isMarshall = location.pathname.includes('/marshall');
   const isMarshallScore = location.pathname.includes('/updatemarshallscore');
-  const [playerCode, setPlayerCode] = useState('');
+  const [playerCode, setPlayerCode] = useState(''); // flight number input
+  const [tournamentCode, setTournamentCode] = useState<string>(() => localStorage.getItem('tournament_code') || '');
+  const [accessInfo, setAccessInfo] = useState<any>(null); // result of GET /tournaments/access/:code
+  const [isLoading, setIsLoading] = useState(false);
+  const [marshalTournamentCode, setMarshalTournamentCode] = useState<string>(() => localStorage.getItem('tournament_code') || '');
   const [foundPlayer, setFoundPlayer] = useState<any>(null);
   const [tournamentInfo, setTournamentInfo] = useState<any>(null);
   const [caddiesMaster, setCaddiesMaster] = useState<any[]>([]);
@@ -123,124 +126,142 @@ const TournamentPlayerSelection = () => {
     }
   }, [isMarshallScore]);
 
+  const apiError = (err: any, fallback: string) => {
+    const msg = err?.response?.data?.message;
+    if (typeof msg === 'string') return msg;
+    if (msg && typeof msg.message === 'string') return msg.message;
+    if (!err?.response) return 'Tidak bisa terhubung ke server. Cek koneksi internet tablet.';
+    return fallback;
+  };
+
+  // Step 1: 3-digit tournament code
+  const loadTournamentByCode = async (codeInput?: string) => {
+    const code = (codeInput ?? tournamentCode).trim();
+    setError('');
+    setFoundPlayer(null);
+    if (!/^\d{3}$/.test(code)) {
+      setError('Kode turnamen harus 3 angka.');
+      return;
+    }
+    setIsLoading(true);
+    try {
+      const res = await api.get(`/tournaments/access/${code}`);
+      setAccessInfo(res.data);
+      setTournamentInfo({ name: res.data.name, course: res.data.course });
+      localStorage.setItem('tournament_code', code);
+      setMarshalTournamentCode(code);
+    } catch (err: any) {
+      setAccessInfo(null);
+      localStorage.removeItem('tournament_code');
+      setError(apiError(err, 'Kode turnamen tidak ditemukan.'));
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Re-open the remembered tournament automatically (same tablet, next flight).
+  useEffect(() => {
+    if (!isMarshall && tournamentCode && /^\d{3}$/.test(tournamentCode)) {
+      loadTournamentByCode(tournamentCode);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const resetTournament = () => {
+    localStorage.removeItem('tournament_code');
+    setTournamentCode('');
+    setAccessInfo(null);
+    setFoundPlayer(null);
+    setPlayerCode('');
+    setError('');
+  };
+
+  // Step 2: flight number
   const handleSearch = async () => {
     setError('');
     setFoundPlayer(null);
-
-    let parsedData: any = null;
-
+    if (!accessInfo) {
+      setError('Masukkan kode turnamen dulu.');
+      return;
+    }
+    const flight = playerCode.trim();
+    if (!/^\d{1,2}$/.test(flight)) {
+      setError('Nomor flight harus 1-2 angka.');
+      return;
+    }
+    setIsLoading(true);
     try {
-      // Always fetch latest from API when searching to support multiple tablets
-      // @ts-ignore
-      const { default: api } = await import('../services/api');
-      const response = await api.get('/tournaments/active');
-      if (response.data && Object.keys(response.data).length > 0) {
-        parsedData = {
-          info: response.data,
-          players: response.data.players,
-          groups: response.data.groups,
-          publishedAt: response.data.publishedAt
-        };
-        localStorage.setItem('active_tournament', JSON.stringify(parsedData));
-        setTournamentInfo(parsedData.info);
-      } else {
-        localStorage.removeItem('active_tournament');
-        setTournamentInfo(null);
-        parsedData = null;
+      const res = await api.get(`/tournaments/access/${accessInfo.code}/flights/${flight}`);
+      const data = res.data;
+      if (data.tournament?.isFinished) {
+        setError('Turnamen sudah selesai. Skor sudah dikunci.');
+        return;
       }
-    } catch (error) {
-      console.error('Error fetching tournament from API:', error);
-      // Fallback to local storage if API is unreachable
-      const tournamentData = localStorage.getItem('active_tournament');
-      if (tournamentData) {
-        parsedData = JSON.parse(tournamentData);
-      }
-    }
-
-    if (!parsedData) {
-      setError('No active tournament found in database.');
-      return;
-    }
-
-    const groups = parsedData.groups || [];
-    
-    if (groups.length === 0) {
-      setError('Tournament data is found, but no flight groups are generated. Please re-publish the tournament from Admin Dashboard.');
-      return;
-    }
-
-    const normalizedInput = playerCode.trim().toUpperCase();
-    
-    // Find which group matches the entered code
-    const group = groups.find((g: any) => g.code === normalizedInput);
-
-    if (group) {
-      const currentCaddie = group.caddie || { number: '000', name: 'Unassigned' };
-      let cleanNumber = currentCaddie.number.toString();
+      const currentCaddie = data.flight.caddie || { number: '000', name: 'Unassigned' };
+      let cleanNumber = (currentCaddie.number ?? '').toString();
       if (cleanNumber.startsWith('C-')) cleanNumber = cleanNumber.replace('C-', '');
       else if (cleanNumber.startsWith('C')) cleanNumber = cleanNumber.replace('C', '');
-
-      let cleanName = currentCaddie.name;
-      // Auto-lookup name from master if still Unassigned
+      let cleanName = currentCaddie.name || 'Unassigned';
       if (cleanName === 'Unassigned') {
-        const savedCaddiesStr = localStorage.getItem('golf_caddies_master');
-        if (savedCaddiesStr) {
-          const master = JSON.parse(savedCaddiesStr);
-          const masterCaddie = master.find((c: any) => c.name === cleanNumber);
-          if (masterCaddie) {
-            cleanName = masterCaddie.searchedName;
-          }
-        }
+        const masterCaddie = caddiesMaster.find((c: any) => c.name === cleanNumber);
+        if (masterCaddie) cleanName = masterCaddie.searchedName;
       }
-
       setFoundPlayer({
         isFlight: true,
-        flightId: group.flightType,
-        code: normalizedInput,
-        players: group.players,
-        caddie: {
-          number: cleanNumber,
-          name: cleanName
-        }
+        flightId: data.flight.number ?? data.flight.code,
+        flightType: data.flight.flightType,
+        code: data.flight.code,
+        startHole: data.flight.startHole,
+        players: data.players,
+        tournament: data.tournament,
+        caddie: { number: cleanNumber, name: cleanName },
       });
-    } else {
-      setError('Invalid Flight Access Code. Please check or scan again.');
+    } catch (err: any) {
+      setError(apiError(err, 'Nomor flight tidak ditemukan.'));
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleStartGame = () => {
-    if (foundPlayer) {
-      // Save current flight session data for scorecard
-      const sessionData = {
-        flight: foundPlayer.code, // Use the unique access code (e.g. GF-OPEN-2026-001)
-        players: foundPlayer.players,
-        caddie: foundPlayer.caddie,
-        startTime: new Date().toISOString()
-      };
-      localStorage.setItem('tournament_session', JSON.stringify(sessionData));
-      
-      // Update active_tournament with new caddie assignment if it was changed
-      const tournamentData = localStorage.getItem('active_tournament');
-      if (tournamentData) {
-        const parsedData = JSON.parse(tournamentData);
-        if (parsedData.groups) {
-          const groupIndex = parsedData.groups.findIndex((g: any) => g.code === foundPlayer.code);
-          if (groupIndex !== -1) {
-            parsedData.groups[groupIndex].caddie = foundPlayer.caddie;
-            localStorage.setItem('active_tournament', JSON.stringify(parsedData));
-            
-            // Try to sync with API silently
-            api.post('/tournaments/sync-scores', {
-              flightCode: foundPlayer.code,
-              players: foundPlayer.players,
-              caddie: foundPlayer.caddie
-            }).catch(err => console.error('Failed to sync caddie update:', err));
-          }
-        }
-      }
+    if (!foundPlayer) return;
+    const sessionData = {
+      tournamentId: foundPlayer.tournament.id,
+      tournamentCode: foundPlayer.tournament.code,
+      flight: foundPlayer.code, // flight code, e.g. "7"
+      flightNumber: foundPlayer.flightId,
+      startHole: foundPlayer.startHole,
+      players: foundPlayer.players,
+      caddie: foundPlayer.caddie,
+      startTime: new Date().toISOString(),
+    };
+    localStorage.setItem('tournament_session', JSON.stringify(sessionData));
+    api.post('/tournaments/sync-scores', {
+      flightCode: foundPlayer.code,
+      caddie: foundPlayer.caddie,
+    }).catch(err => console.error('Failed to sync caddie update:', err));
+    navigate('../tournament-mode/scorecard');
+  };
 
-      // Navigate to the tournament scorecard
-      navigate('../tournament-mode/scorecard');
+  const handleMarshalAccess = async () => {
+    const code = marshalTournamentCode.trim();
+    if (!/^\d{3}$/.test(code)) {
+      setError('Kode turnamen harus 3 angka.');
+      setShowPasswordModal(false);
+      return;
+    }
+    try {
+      const t = await api.get(`/tournaments/access/${code}`);
+      await api.post(`/tournaments/${t.data.id}/marshal/verify`, { marshalPin: marshalPassword });
+      // Kept only for this browser session; sent with every marshal edit and re-checked by the server.
+      sessionStorage.setItem('marshal_auth', JSON.stringify({ tournamentId: t.data.id, tournamentCode: code, pin: marshalPassword }));
+      setShowPasswordModal(false);
+      setMarshalPassword('');
+      navigate('../updatemarshallscore');
+    } catch (err: any) {
+      setError(apiError(err, 'PIN Marshal salah!'));
+      setMarshalPassword('');
+      setShowPasswordModal(false);
     }
   };
 
@@ -269,7 +290,7 @@ const TournamentPlayerSelection = () => {
             {isMarshall ? 'Marshal Access' : 'Tournament Access'}
           </h1>
           <p className="text-white/70 font-medium">
-            {isMarshall ? 'View tournament score' : 'Scan QR or Enter Code'}
+            {isMarshall ? 'View tournament score' : 'Masukkan kode turnamen & nomor flight'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -319,35 +340,68 @@ const TournamentPlayerSelection = () => {
           </div>
         ) : (
           <div className="space-y-4">
-            <div className="relative group">
-              <input 
-                list="flight-codes-list"
-                type="text" 
-                value={playerCode}
-                onChange={(e) => setPlayerCode(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                placeholder="ENTER PLAYER CODE (e.g. GF-OPEN-2026-001)"
-                className="w-full bg-white border border-slate-200 rounded-[24px] py-6 px-8 text-lg font-black tracking-widest placeholder:text-slate-300 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all text-center uppercase text-slate-800 shadow-sm"
-              />
-              <datalist id="flight-codes-list">
-                {tournamentInfo?.groups?.map((g: any) => (
-                  <option key={g.code} value={g.code}>
-                    {g.flightType ? `Flight ${g.flightType}` : ''}
-                  </option>
-                ))}
-              </datalist>
-              <button 
-                onClick={handleSearch}
-                className="absolute right-4 top-1/2 -translate-y-1/2 w-12 h-12 bg-blue-600 rounded-xl flex items-center justify-center hover:bg-blue-700 transition-all active:scale-95 text-white"
-              >
-                <Search size={20} />
-              </button>
-            </div>
-
-            <button className="w-full py-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-[24px] flex items-center justify-center gap-3 transition-all active:scale-95 text-slate-600 font-black uppercase tracking-widest text-xs shadow-sm">
-              <QrCode size={20} className="text-blue-600" />
-              Scan QR Code
-            </button>
+            {!accessInfo ? (
+              <div className="space-y-3">
+                <label className="block text-center text-xs font-black uppercase tracking-[0.25em] text-white/70">
+                  Langkah 1 · Kode Turnamen
+                </label>
+                <div className="relative group">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={3}
+                    autoFocus
+                    value={tournamentCode}
+                    onChange={(e) => setTournamentCode(e.target.value.replace(/\D/g, '').slice(0, 3))}
+                    onKeyDown={(e) => e.key === 'Enter' && loadTournamentByCode()}
+                    placeholder="000"
+                    className="w-full bg-white border border-slate-200 rounded-[24px] py-6 px-8 text-5xl font-black tracking-[0.5em] placeholder:text-slate-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all text-center text-slate-800 shadow-sm"
+                  />
+                </div>
+                <button
+                  onClick={() => loadTournamentByCode()}
+                  disabled={isLoading}
+                  className="w-full py-5 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 rounded-[24px] flex items-center justify-center gap-3 transition-all active:scale-95 text-white font-black uppercase tracking-widest text-sm shadow-xl shadow-blue-600/20"
+                >
+                  <Search size={20} />
+                  {isLoading ? 'Memuat...' : 'Lanjut'}
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-black uppercase tracking-[0.25em] text-white/70">
+                    Langkah 2 · Nomor Flight
+                  </label>
+                  <button onClick={resetTournament} className="text-[11px] font-bold text-white/70 underline">
+                    Ganti turnamen ({accessInfo.code})
+                  </button>
+                </div>
+                <div className="relative group">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]*"
+                    maxLength={2}
+                    autoFocus
+                    value={playerCode}
+                    onChange={(e) => setPlayerCode(e.target.value.replace(/\D/g, '').slice(0, 2))}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                    placeholder="1"
+                    className="w-full bg-white border border-slate-200 rounded-[24px] py-6 px-8 text-5xl font-black tracking-[0.3em] placeholder:text-slate-200 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 outline-none transition-all text-center text-slate-800 shadow-sm"
+                  />
+                </div>
+                <button
+                  onClick={handleSearch}
+                  disabled={isLoading}
+                  className="w-full py-5 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 rounded-[24px] flex items-center justify-center gap-3 transition-all active:scale-95 text-white font-black uppercase tracking-widest text-sm shadow-xl shadow-blue-600/20"
+                >
+                  <Search size={20} />
+                  {isLoading ? 'Memuat...' : 'Cari Flight'}
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -374,6 +428,9 @@ const TournamentPlayerSelection = () => {
                 <h3 className="text-2xl font-black uppercase italic text-center leading-none mb-1 text-slate-800">
                   FLIGHT {foundPlayer.flightId}
                 </h3>
+                {foundPlayer.flightType && (
+                  <span className="text-xs font-black text-blue-600 mb-1">Kategori {foundPlayer.flightType}</span>
+                )}
                 <div className="flex items-center gap-2 mb-8">
                   <span className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em]">Group Access Verified</span>
                 </div>
@@ -456,26 +513,28 @@ const TournamentPlayerSelection = () => {
                 Marshal Access
               </h3>
               <p className="text-xs font-bold text-slate-500 mb-8">
-                Please enter the marshal password to access tournament scores.
+                Masukkan kode turnamen dan PIN marshal.
               </p>
               
               <div className="w-full space-y-4">
                 <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={3}
+                  value={marshalTournamentCode}
+                  onChange={(e) => setMarshalTournamentCode(e.target.value.replace(/\D/g, '').slice(0, 3))}
+                  placeholder="Kode turnamen (3 angka)"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-4 text-center font-black tracking-[0.3em] text-slate-700 outline-none focus:border-blue-500 transition-all placeholder:tracking-normal placeholder:font-medium"
+                />
+                <input
                   type="password"
+                  inputMode="numeric"
                   value={marshalPassword}
                   onChange={(e) => setMarshalPassword(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      if (marshalPassword === '1234') {
-                        navigate('../updatemarshallscore');
-                      } else {
-                        setError('Password Marshal Salah!');
-                        setMarshalPassword('');
-                        setShowPasswordModal(false);
-                      }
-                    }
+                    if (e.key === 'Enter') handleMarshalAccess();
                   }}
-                  placeholder="Enter Password..."
+                  placeholder="PIN Marshal"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-4 text-center font-black tracking-[0.3em] text-slate-700 outline-none focus:border-blue-500 transition-all placeholder:tracking-normal placeholder:font-medium"
                   autoFocus
                 />
@@ -490,15 +549,7 @@ const TournamentPlayerSelection = () => {
                     CANCEL
                   </button>
                   <button
-                    onClick={() => {
-                      if (marshalPassword === '1234') {
-                      navigate('../updatemarshallscore');
-                    } else {
-                        setError('Password Marshal Salah!');
-                        setMarshalPassword('');
-                        setShowPasswordModal(false);
-                      }
-                    }}
+                    onClick={handleMarshalAccess}
                     className="py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg shadow-blue-600/20 transition-all active:scale-95"
                   >
                     ACCESS

@@ -13,6 +13,33 @@ import {
 } from 'lucide-react';
 import ScoreInputModal from '../components/ScoreInputModal';
 import LeaderboardModal from '../components/LeaderboardModal';
+import api from '../services/api';
+
+type Nine = 'IN' | 'OUT';
+const nineOf = (hole: number): Nine => (hole <= 9 ? 'IN' : 'OUT');
+const idxOf = (hole: number) => (hole - 1) % 9;
+const emptySlot = (i: number) => ({
+  id: `empty-${i}`,
+  name: '-',
+  manualTotal: null,
+  scores: { IN: Array(9).fill(0), OUT: Array(9).fill(0) },
+  approvals: { IN: Array(9).fill(false), OUT: Array(9).fill(false) },
+  marshalEdited: { IN: Array(9).fill(false), OUT: Array(9).fill(false) },
+  versions: { IN: Array(9).fill(0), OUT: Array(9).fill(0) },
+});
+const padPlayers = (list: any[]) => {
+  const out = [...(list || [])];
+  while (out.length < 4) out.push(emptySlot(out.length));
+  return out;
+};
+const apiMessage = (err: any, fallback = 'Gagal menyimpan ke server.') => {
+  const msg = err?.response?.data?.message;
+  if (typeof msg === 'string') return msg;
+  if (msg && typeof msg.message === 'string') return msg.message;
+  if (Array.isArray(msg)) return msg.join(', ');
+  if (!err?.response) return 'Tidak ada koneksi ke server. Skor belum tersimpan, coba lagi.';
+  return fallback;
+};
 
 const TournamentScorecard = () => {
   const navigate = useNavigate();
@@ -35,6 +62,9 @@ const TournamentScorecard = () => {
   const [session, setSession] = useState<any>(null);
   const [tournamentInfo, setTournamentInfo] = useState<any>(null);
   const [players, setPlayers] = useState<any[]>([]);
+  const [serverPars, setServerPars] = useState<number[] | null>(null);
+  const pendingSavesRef = useRef(0);
+  const marshalPinRef = useRef<string | null>(null);
 
   // Modal State
   const [isScoreModalOpen, setIsScoreModalOpen] = useState(false);
@@ -147,165 +177,69 @@ const TournamentScorecard = () => {
     ]
   };
 
+  if (serverPars && serverPars.length === 18) {
+    (['IN', 'OUT'] as const).forEach((n) => {
+      holeData[n] = holeData[n].map((h) => ({ ...h, par: serverPars[h.num - 1] ?? h.par }));
+    });
+  }
+
+  const refreshFlight = async (sess: any = session) => {
+    if (!sess?.tournamentId || !sess?.flight) return;
+    try {
+      const res = await api.get(`/tournaments/${sess.tournamentId}/flights/${sess.flight}`);
+      if (pendingSavesRef.current > 0) return; // don't overwrite optimistic state mid-save
+      const data = res.data;
+      setTournamentInfo(data.tournament);
+      if (Array.isArray(data.tournament?.pars)) setServerPars(data.tournament.pars);
+      const padded = padPlayers(data.players);
+      setPlayers(padded);
+      localStorage.setItem(`tournament_scores_${sess.flight}`, JSON.stringify(padded));
+    } catch (err) {
+      console.warn('Failed to refresh flight scores:', err);
+      throw err;
+    }
+  };
+
   useEffect(() => {
-    // Load session and tournament data
+    // Load session and tournament data (server is the source of truth)
     const sessionData = localStorage.getItem('tournament_session');
-    const tournamentData = localStorage.getItem('active_tournament');
+    if (!sessionData) {
+      navigate('../tournament-selection');
+      return;
+    }
+    const parsedSession = JSON.parse(sessionData);
+    if (!parsedSession?.tournamentId || !parsedSession?.flight) {
+      // Session from the old flow (before tournament codes) -> start over
+      localStorage.removeItem('tournament_session');
+      navigate('../tournament-selection');
+      return;
+    }
+    setSession(parsedSession);
 
-    const initializeData = async () => {
-      if (sessionData && tournamentData) {
-        const parsedSession = JSON.parse(sessionData);
-        const parsedTournament = JSON.parse(tournamentData);
-        
-        setSession(parsedSession);
-        setTournamentInfo(parsedTournament.info);
+    const startHoleKey = `tournament_start_hole_${parsedSession.tournamentId}_${parsedSession.flight}`;
+    const savedStartHole = Number(localStorage.getItem(startHoleKey));
+    const fallbackStart = Number(parsedSession.startHole) || 1;
+    const finalStartHole = Number.isInteger(savedStartHole) && savedStartHole >= 1 && savedStartHole <= 18 ? savedStartHole : fallbackStart;
+    setStartHoleNumber(finalStartHole);
+    setActiveNine(finalStartHole <= 9 ? 'IN' : 'OUT');
 
-        const startHoleKey = `tournament_start_hole_${parsedSession.flight}`;
-        const savedStartHoleRaw = localStorage.getItem(startHoleKey);
-        const savedStartHole = savedStartHoleRaw ? Number(savedStartHoleRaw) : NaN;
-        const finalStartHole = Number.isFinite(savedStartHole) && savedStartHole >= 1 && savedStartHole <= 18 ? savedStartHole : 1;
-        setStartHoleNumber(finalStartHole);
-        setActiveNine(finalStartHole <= 9 ? 'IN' : 'OUT');
-
-        // Fetch latest data from API to sync across browsers/devices
-        try {
-          // @ts-ignore
-          const { default: api } = await import('../services/api');
-          const response = await api.get('/tournaments/active');
-          if (response.data && Object.keys(response.data).length > 0) {
-            setTournamentInfo(response.data);
-            
-            // Re-sync session and active_tournament local storage so it reflects the new tournament data
-            localStorage.setItem('active_tournament', JSON.stringify({
-              info: response.data,
-              players: response.data.players,
-              groups: response.data.groups,
-              publishedAt: response.data.publishedAt
-            }));
-
-            if (response.data.groups) {
-              const dbGroups = response.data.groups;
-              const myGroup = dbGroups.find((g: any) => g.code === parsedSession.flight);
-              
-              if (myGroup && myGroup.players && myGroup.players.length > 0) {
-                // Update local storage with the latest data from the server
-                localStorage.setItem(`tournament_scores_${parsedSession.flight}`, JSON.stringify(myGroup.players));
-              }
-            }
-          } else {
-            // No active tournament for this location
-            localStorage.removeItem('active_tournament');
-            setTournamentInfo(null);
-            return; // Exit early if no active tournament
-          }
-        } catch (err) {
-          console.warn('Failed to fetch latest scores from API during scorecard initialization:', err);
-        }
-
-        // Get current flight players: 
-        // 1. Try from session (most reliable as it's from when they logged in)
-        // 2. Try from groups in active_tournament (backup)
-        let currentFlightPlayers = [];
-        if (Array.isArray(parsedSession.players)) {
-          currentFlightPlayers = parsedSession.players;
-        }
-        
-        if (currentFlightPlayers.length === 0) {
-          const currentGroup = (parsedTournament.groups || [])
-            .find((g: any) => g.code === parsedSession.flight);
-          if (currentGroup && Array.isArray(currentGroup.players)) {
-            currentFlightPlayers = currentGroup.players;
-          }
-        }
-
-        // Initialize players with scores
-        const savedScoresKey = `tournament_scores_${parsedSession.flight}`;
-        const savedScores = localStorage.getItem(savedScoresKey);
-        
-        let finalPlayers = [];
-
-        if (savedScores) {
-          try {
-            const parsedSavedScores = JSON.parse(savedScores);
-            if (Array.isArray(parsedSavedScores)) {
-              // Verify if names match the current tournament data to prevent "stale" data
-              const namesMatch = parsedSavedScores.every((p: any) => {
-                if (p.name === '-') return true; // Ignore empty slots
-                return currentFlightPlayers.some((cp: any) => cp.name === p.name);
-              }) && currentFlightPlayers.every((cp: any) => {
-                return parsedSavedScores.some((p: any) => p.name === cp.name);
-              });
-
-              if (namesMatch) {
-                finalPlayers = parsedSavedScores;
-              }
-            }
-          } catch (e) {
-            console.warn("Failed to parse saved scores", e);
-          }
-        }
-
-        if (finalPlayers.length === 0) {
-          // Initialize players with scores and approvals
-          finalPlayers = currentFlightPlayers.map((p: any) => ({
-            ...p,
-            manualTotal: null as number | null,
-            scores: {
-              IN: Array(9).fill(0),
-              OUT: Array(9).fill(0)
-            },
-            approvals: {
-              IN: Array(9).fill(false),
-              OUT: Array(9).fill(false)
-            },
-            marshalEdited: {
-              IN: Array(9).fill(false),
-              OUT: Array(9).fill(false)
-            }
-          }));
-          
-          // Fill up to 4 slots for layout consistency
-          while (finalPlayers.length < 4) {
-            finalPlayers.push({
-              id: `empty-${finalPlayers.length}`,
-              name: '-',
-              manualTotal: null,
-              scores: { IN: Array(9).fill(0), OUT: Array(9).fill(0) },
-              approvals: { IN: Array(9).fill(false), OUT: Array(9).fill(false) },
-              marshalEdited: { IN: Array(9).fill(false), OUT: Array(9).fill(false) }
-            });
-          }
-          localStorage.setItem(savedScoresKey, JSON.stringify(finalPlayers));
-        } else {
-          // Ensure properties exist for existing players
-          finalPlayers = finalPlayers.map((p: any) => ({
-            ...p,
-            approvals: p.approvals || {
-              IN: Array(9).fill(false),
-              OUT: Array(9).fill(false)
-            },
-            marshalEdited: p.marshalEdited || {
-              IN: Array(9).fill(false),
-              OUT: Array(9).fill(false)
-            }
-          }));
-        }
-
-        setPlayers(finalPlayers);
-      } else {
-        navigate('../tournament-selection');
-      }
-    };
-
-    initializeData();
+    refreshFlight(parsedSession).catch(() => {
+      // Offline fallback: show last known scores (read-only until connection is back)
+      const cached = localStorage.getItem(`tournament_scores_${parsedSession.flight}`);
+      setPlayers(cached ? JSON.parse(cached) : padPlayers(parsedSession.players || []));
+      setTournamentInfo({ name: `Turnamen ${parsedSession.tournamentCode || ''}`, course: '' });
+      showNotice('Gagal memuat data dari server. Menampilkan data terakhir.', 'error');
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigate]);
 
   useEffect(() => {
     const groupCode = (session?.flight || '').toString();
     if (!groupCode) return;
-    const startHoleKey = `tournament_start_hole_${groupCode}`;
+    if (!session?.tournamentId) return;
+    const startHoleKey = `tournament_start_hole_${session.tournamentId}_${groupCode}`;
     localStorage.setItem(startHoleKey, String(startHoleNumber));
-  }, [session?.flight, startHoleNumber]);
+  }, [session?.flight, session?.tournamentId, startHoleNumber]);
 
   // Focus effect for chat
   useEffect(() => {
@@ -323,27 +257,8 @@ const TournamentScorecard = () => {
   useEffect(() => {
     if (!session || !session.flight) return;
     
-    const fetchLatestScores = async () => {
-      try {
-        // @ts-ignore
-        const { default: api } = await import('../services/api');
-        const response = await api.get('/tournaments/active');
-        if (response.data && response.data.groups) {
-          const myGroup = response.data.groups.find((g: any) => g.code === session.flight);
-          if (myGroup && myGroup.players && myGroup.players.length > 0) {
-            // Compare with current players to avoid unnecessary state updates
-            const latestPlayersStr = JSON.stringify(myGroup.players);
-            const currentPlayersStr = localStorage.getItem(`tournament_scores_${session.flight}`);
-            
-            if (latestPlayersStr !== currentPlayersStr) {
-              localStorage.setItem(`tournament_scores_${session.flight}`, latestPlayersStr);
-              setPlayers(myGroup.players);
-            }
-          }
-        }
-      } catch (err) {
-        // Silent fail for polling
-      }
+    const fetchLatestScores = () => {
+      refreshFlight(session).catch(() => { /* silent while polling */ });
     };
 
     const scoreInterval = window.setInterval(fetchLatestScores, 3000);
@@ -352,9 +267,8 @@ const TournamentScorecard = () => {
 
   const fetchChatMessages = async () => {
     try {
-      // @ts-ignore
-      const { default: api } = await import('../services/api');
-      const res = await api.get('/tournaments/chat');
+      if (!session?.tournamentId) return;
+      const res = await api.get(`/tournaments/${session.tournamentId}/messages`);
       
       let newMessagesArray = [];
       if (res.data?.success) {
@@ -434,12 +348,11 @@ const TournamentScorecard = () => {
     setChatDraft('');
     
     try {
-      // @ts-ignore
-      const { default: api } = await import('../services/api');
-      await api.post('/tournaments/chat', {
+      await api.post(`/tournaments/${session.tournamentId}/messages`, {
         to: payload.to,
         fromRole: 'caddie',
         from,
+        groupCode,
         text
       });
     } catch {}
@@ -506,22 +419,6 @@ const TournamentScorecard = () => {
     const inTotal = calculateTotal(inScores);
     const outTotal = calculateTotal(outScores);
     return { in: inTotal, out: outTotal, total: (inTotal as number) + (outTotal as number) };
-  };
-
-  const syncToApi = async (updatedPlayers: any[]) => {
-    try {
-      // @ts-ignore
-      const { default: api } = await import('../services/api');
-      
-      if (session?.flight) {
-        await api.post('/tournaments/sync-scores', {
-          flightCode: session.flight,
-          players: updatedPlayers
-        });
-      }
-    } catch (err) {
-      console.error('Failed to sync score update to API:', err);
-    }
   };
 
   const notifyAdmin = async (changedHole: number, changedPlayerName: string, newScore: number | string, isApproved: boolean, isMarshalEdit: boolean) => {
@@ -621,171 +518,143 @@ const TournamentScorecard = () => {
     setIsScoreModalOpen(true);
   };
 
-  const handleSaveScore = (newScore: number | string | null) => {
-    if (!selectedScoreData || !session) return;
-
-    let currentHoleIndex = -1;
-    let isMarshalEditNow = false;
-
-    setPlayers(prev => {
-      const updatedPlayers = prev.map(p => {
-        if (p.id === selectedScoreData.playerId) {
-          if (selectedScoreData.isTotal) {
-            return { ...p, manualTotal: newScore as number | null };
-          } else {
-            // Safely initialize scores if they don't exist
-            const newScores = {
-              IN: p.scores?.IN ? [...p.scores.IN] : Array(9).fill(0),
-              OUT: p.scores?.OUT ? [...p.scores.OUT] : Array(9).fill(0)
-            };
-            const newApprovals = {
-              IN: p.approvals?.IN ? [...p.approvals.IN] : Array(9).fill(false),
-              OUT: p.approvals?.OUT ? [...p.approvals.OUT] : Array(9).fill(false)
-            };
-            const newMarshalEdited = {
-              IN: p.marshalEdited?.IN ? [...p.marshalEdited.IN] : Array(9).fill(false),
-              OUT: p.marshalEdited?.OUT ? [...p.marshalEdited.OUT] : Array(9).fill(false)
-            };
-            
-            const index = holeData[activeNine].findIndex(h => h.num === selectedScoreData.holeNumber);
-            if (index !== -1) {
-              newScores[activeNine][index] = newScore;
-              
-              // If edited by marshal (was approved), mark as marshalEdited
-              if (newApprovals[activeNine][index]) {
-                newMarshalEdited[activeNine][index] = true;
-                isMarshalEditNow = true;
-              } else {
-                // Reset approval if normal score changes
-                newApprovals[activeNine][index] = false;
-              }
-
-              // Automatically approve if 'OUT'
-              if (newScore === 'OUT') {
-                newApprovals[activeNine][index] = true;
-                
-                // Set all subsequent holes to 'OUT' automatically
-                let isAfter = false;
-                holeData[activeNine].forEach((h, i) => {
-                  if (isAfter) {
-                    newScores[activeNine][i] = 'OUT';
-                    newApprovals[activeNine][i] = true;
-                  }
-                  if (i === index) isAfter = true;
-                });
-                
-                // Also handle the other nine if we're on the first nine
-                const otherNine = activeNine === 'IN' ? 'OUT' : 'IN';
-                // If they started on IN, and they are now on IN, they haven't played OUT yet.
-                // It's safe to mark the other nine as OUT as well, assuming they quit the whole game.
-                holeData[otherNine].forEach((h, i) => {
-                   // We only mark them if they haven't played them yet or just to be safe mark all.
-                   // Actually, if they quit, they quit. Mark all remaining unplayed as OUT.
-                   if (newScores[otherNine][i] === 0 || newScores[otherNine][i] === null) {
-                     newScores[otherNine][i] = 'OUT';
-                     newApprovals[otherNine][i] = true;
-                   }
-                });
-              }
-              
-              currentHoleIndex = index;
-            }
-
-            return { ...p, scores: newScores, approvals: newApprovals, marshalEdited: newMarshalEdited };
-          }
-        }
-        return p;
-      });
-
-      // Check if all active players have a score > 0 or 'OUT' for this hole and not marshal edited
-      if (!selectedScoreData.isTotal && currentHoleIndex !== -1 && newScore !== null && (newScore === 'OUT' || (typeof newScore === 'number' && newScore > 0))) {
-        // Send notification for new score (unapproved) unless it's automatically approved (like OUT)
-        const isApprovedNow = newScore === 'OUT' || isMarshalEditNow;
-        
-        notifyAdmin(
-          selectedScoreData.holeNumber,
-          selectedScoreData.playerName,
-          newScore as string | number,
-          isApprovedNow,
-          isMarshalEditNow
-        );
-
-        const activePlayers = updatedPlayers.filter(p => p.name !== '-');
-        const allFilled = activePlayers.every(p => {
-          const score = p?.scores?.[activeNine]?.[currentHoleIndex];
-          return (score !== null && typeof score === 'number' && score > 0) || score === 'OUT';
-        });
-        
-        // Also ensure they are not already approved and not marshal edited
-        const anyNeedsApproval = activePlayers.some(p => {
-           const score = p?.scores?.[activeNine]?.[currentHoleIndex];
-           if (score === 'OUT') return false; // OUT is automatically approved
-           return !p?.approvals?.[activeNine]?.[currentHoleIndex] && !p?.marshalEdited?.[activeNine]?.[currentHoleIndex];
-        });
-
-        // Automatic approval popup is disabled. Caddie will click "Confirm Player" manually.
-      }
-
-      localStorage.setItem(`tournament_scores_${session.flight}`, JSON.stringify(updatedPlayers));
-      syncToApi(updatedPlayers); // sync to backend!
-      return updatedPlayers;
-    });
+  const withLocalScore = (p: any, hole: number, value: number | string, approved: boolean, marshal: boolean) => {
+    const n = nineOf(hole);
+    const i = idxOf(hole);
+    const scores = { IN: [...(p.scores?.IN || Array(9).fill(0))], OUT: [...(p.scores?.OUT || Array(9).fill(0))] };
+    const approvals = { IN: [...(p.approvals?.IN || Array(9).fill(false))], OUT: [...(p.approvals?.OUT || Array(9).fill(false))] };
+    const marshalEdited = { IN: [...(p.marshalEdited?.IN || Array(9).fill(false))], OUT: [...(p.marshalEdited?.OUT || Array(9).fill(false))] };
+    scores[n][i] = value;
+    approvals[n][i] = approved;
+    if (marshal) marshalEdited[n][i] = true;
+    return { ...p, scores, approvals, marshalEdited };
   };
 
-  const handleMarshalAuth = () => {
-    // Default Marshal Password: 1234
-    if (marshalPassword === '1234') {
-      setIsMarshalModalOpen(false);
-      setMarshalPassword('');
-      if (marshalTarget) {
-        const holeIndex = holeData[activeNine].findIndex(h => h.num === marshalTarget.holeNumber);
-        setSelectedScoreData({
-          playerId: marshalTarget.playerId,
-          playerName: marshalTarget.playerName,
-          holeNumber: marshalTarget.holeNumber,
-          currentScore: marshalTarget.currentScore,
-          parValue: holeIndex !== -1 ? holeData[activeNine][holeIndex].par : undefined
+  const caddieActorName = () => {
+    const c = session?.caddie;
+    if (!c) return 'Caddie';
+    return c.name && c.name !== 'Unassigned' ? `Caddie ${c.name}` : `Caddie No.${c.number ?? '-'}`;
+  };
+
+  const handleSaveScore = async (newScore: number | string | null) => {
+    if (!selectedScoreData || !session) return;
+    const target = selectedScoreData;
+    // Read synchronously: the modal calls onClose (which clears it) right after onSave.
+    const marshalPin = marshalPinRef.current;
+    marshalPinRef.current = null;
+
+    if (target.isTotal) {
+      showNotice('Turnamen wajib input skor per hole. Mode total tidak dipakai.', 'error');
+      return;
+    }
+    const player = players.find((p) => p.id === target.playerId);
+    if (!player || String(player.id).startsWith('empty-')) return;
+
+    const hole = target.holeNumber;
+    const isOut = newScore === 'OUT';
+    const strokes = isOut ? null : typeof newScore === 'number' && newScore > 0 ? newScore : null;
+    const n = nineOf(hole);
+    const i = idxOf(hole);
+    const version = player.versions?.[n]?.[i];
+    const actorName = caddieActorName();
+
+    // Optimistic update
+    setPlayers((prev) =>
+      prev.map((p) =>
+        p.id === player.id ? withLocalScore(p, hole, isOut ? 'OUT' : strokes ?? 0, isOut || !!marshalPin, !!marshalPin) : p,
+      ),
+    );
+
+    pendingSavesRef.current += 1;
+    try {
+      const body: any = { playerId: player.id, hole, strokes, out: isOut, groupCode: String(session.flight), actorName };
+      if (marshalPin) {
+        await api.post(`/tournaments/${session.tournamentId}/scores/marshal-edit`, {
+          ...body,
+          marshalPin,
+          actorName: 'Marshal',
+          reason: `Edit oleh marshal (flight ${session.flight})`,
         });
-        
-        // Notify admin about marshal edit start (optional, but let's notify when they save the score later via the score modal)
-        
-        setIsScoreModalOpen(true);
+      } else {
+        await api.put(`/tournaments/${session.tournamentId}/scores`, {
+          ...body,
+          ...(version ? { expectedVersion: version } : {}),
+        });
       }
-    } else {
-      showNotice('Password Marshal Salah!', 'error');
-      setMarshalPassword('');
+
+      // OUT = player withdraws: mark every hole without a score as OUT too.
+      if (isOut) {
+        for (let h = 1; h <= 18; h++) {
+          if (h === hole) continue;
+          const sc = player.scores?.[nineOf(h)]?.[idxOf(h)];
+          if (sc === 0 || sc === null || sc === undefined || sc === '') {
+            await api
+              .put(`/tournaments/${session.tournamentId}/scores`, { playerId: player.id, hole: h, out: true, groupCode: String(session.flight), actorName })
+              .catch((e) => console.warn('Failed to mark OUT on hole', h, e));
+          }
+        }
+      }
+
+      if (strokes !== null || isOut) {
+        notifyAdmin(hole, player.name, isOut ? 'OUT' : (strokes as number), isOut || !!marshalPin, !!marshalPin);
+      }
+    } catch (err: any) {
+      showNotice(apiMessage(err), 'error');
+    } finally {
+      pendingSavesRef.current -= 1;
+      await refreshFlight().catch(() => {});
     }
   };
 
-  const handleConfirmApproval = () => {
-    if (!approvalData || !session) return;
-
-    setPlayers(prev => {
-      const updatedPlayers = prev.map(p => {
-        const isApprovedPlayer = approvalData.players.some(ap => ap.playerId === p.id);
-        if (isApprovedPlayer) {
-          const newApprovals = { ...p.approvals };
-          const index = holeData[activeNine].findIndex(h => h.num === approvalData.holeNumber);
-          if (index !== -1) {
-            newApprovals[activeNine][index] = true;
-          }
-
-          // Send approval notification
-          const apData = approvalData.players.find(ap => ap.playerId === p.id);
-          if (apData) {
-            notifyAdmin(approvalData.holeNumber, p.name, apData.score, true, false);
-          }
-
-          return { ...p, approvals: newApprovals };
-        }
-        return p;
+  const handleMarshalAuth = async () => {
+    if (!session?.tournamentId) return;
+    try {
+      await api.post(`/tournaments/${session.tournamentId}/marshal/verify`, { marshalPin: marshalPassword });
+    } catch (err: any) {
+      showNotice(apiMessage(err, 'PIN Marshal salah!'), 'error');
+      setMarshalPassword('');
+      return;
+    }
+    marshalPinRef.current = marshalPassword;
+    setIsMarshalModalOpen(false);
+    setMarshalPassword('');
+    if (marshalTarget) {
+      const holeIndex = holeData[activeNine].findIndex(h => h.num === marshalTarget.holeNumber);
+      setSelectedScoreData({
+        playerId: marshalTarget.playerId,
+        playerName: marshalTarget.playerName,
+        holeNumber: marshalTarget.holeNumber,
+        currentScore: marshalTarget.currentScore,
+        parValue: holeIndex !== -1 ? holeData[activeNine][holeIndex].par : undefined
       });
-      localStorage.setItem(`tournament_scores_${session.flight}`, JSON.stringify(updatedPlayers));
-      syncToApi(updatedPlayers); // Sync approvals to API
-      return updatedPlayers;
-    });
+      setIsScoreModalOpen(true);
+    }
+  };
+
+  const handleConfirmApproval = async () => {
+    if (!approvalData || !session) return;
+    const ids = approvalData.players.map((ap) => ap.playerId).filter((id) => !String(id).startsWith('empty-'));
+    const hole = approvalData.holeNumber;
     setIsApprovalModalOpen(false);
     setApprovalData(null);
+    if (ids.length === 0) return;
+
+    pendingSavesRef.current += 1;
+    try {
+      await api.post(`/tournaments/${session.tournamentId}/scores/validate`, {
+        playerIds: ids,
+        holes: [hole],
+        validatedBy: approvalData.players.map((ap) => ap.playerName).join(', ').slice(0, 100),
+        groupCode: String(session.flight),
+      });
+      approvalData.players.forEach((ap) => notifyAdmin(hole, ap.playerName, ap.score, true, false));
+      showNotice(`Skor hole ${hole} sudah dikonfirmasi player.`, 'info');
+    } catch (err: any) {
+      showNotice(apiMessage(err, 'Gagal konfirmasi skor.'), 'error');
+    } finally {
+      pendingSavesRef.current -= 1;
+      await refreshFlight().catch(() => {});
+    }
   };
 
   const handleManualConfirmPlayer = () => {
@@ -926,7 +795,9 @@ const TournamentScorecard = () => {
             </button>
           </div>
 
+          {/* Total-score mode disabled for tournaments: scores must be recorded per hole for validation & ranking. */}
           <button 
+            style={{ display: 'none' }}
             onClick={() => setIsTotalInputMode(!isTotalInputMode)}
             className={`px-5 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest border transition-all ${isTotalInputMode ? 'bg-emerald-500 border-emerald-400 text-white shadow-lg shadow-emerald-500/20' : 'bg-slate-800 border-slate-700 text-slate-400'}`}
           >
@@ -1171,7 +1042,10 @@ const TournamentScorecard = () => {
 
       <ScoreInputModal
         isOpen={isScoreModalOpen}
-        onClose={() => setIsScoreModalOpen(false)}
+        onClose={() => {
+          setIsScoreModalOpen(false);
+          marshalPinRef.current = null;
+        }}
         playerName={selectedScoreData?.playerName || ''}
         holeNumber={selectedScoreData?.holeNumber || 0}
         currentScore={selectedScoreData?.currentScore ?? null}

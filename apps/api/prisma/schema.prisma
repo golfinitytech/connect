@@ -3,8 +3,11 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  // Supabase: pooled connection (port 6543, ?pgbouncer=true) used by the app at runtime
+  url       = env("DATABASE_URL")
+  // Supabase: direct connection (port 5432) used by `prisma db push` / migrations
+  directUrl = env("DIRECT_URL")
 }
 
 enum RoundStatus {
@@ -295,11 +298,23 @@ model Tournament {
   teeTime       String
   rules         String
   scoringMethod String
+  /// Short numeric access code typed on tablets (3 digits, e.g. "482").
+  code          String?
+  /// Par per hole, index 0 = hole 1 (18 ints). Null = default par layout.
+  pars          Json?
+  /// PIN the marshal must enter to edit a validated score. Checked server-side only.
+  marshalPin    String?
   publishedAt   DateTime?
+  finishedAt    DateTime?
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
   players       TournamentPlayer[]
   groups        TournamentGroup[]
+  scores        TournamentScore[]
+  scoreLogs     TournamentScoreLog[]
+  messages      TournamentMessage[]
+
+  @@index([code])
 }
 
 model TournamentPlayer {
@@ -316,6 +331,7 @@ model TournamentPlayer {
   tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
   groupId      String?
   group        TournamentGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  scores       TournamentScore[]
 
   @@unique([tournamentId, code])
   @@index([code])
@@ -324,7 +340,12 @@ model TournamentPlayer {
 model TournamentGroup {
   id           String             @id @default(cuid())
   tournamentId String
+  /// Flight access code typed on tablets. New tournaments use the flight number ("1", "2", ...).
   code         String
+  /// Flight number within the tournament (1..99).
+  number       Int?
+  /// Shotgun start hole for this flight (1..18).
+  startHole    Int?
   flightType   String
   caddieData   Json?
   scoresData   Json?
@@ -358,4 +379,73 @@ model CaddiePerformance {
   date        DateTime @default(now())
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+enum TournamentScoreStatus {
+  ENTERED
+  VALIDATED
+}
+
+/// One row per player per hole. Single source of truth for tournament scores.
+model TournamentScore {
+  id              String                @id @default(cuid())
+  tournamentId    String
+  playerId        String
+  hole            Int
+  /// Gross strokes. Null when the player is marked OUT on this hole.
+  strokes         Int?
+  isOut           Boolean               @default(false)
+  status          TournamentScoreStatus @default(ENTERED)
+  editedByMarshal Boolean               @default(false)
+  /// Incremented on every change; used for optimistic concurrency between devices.
+  version         Int                   @default(1)
+  enteredBy       String?
+  validatedBy     String?
+  validatedAt     DateTime?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+  tournament      Tournament            @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  player          TournamentPlayer      @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@unique([playerId, hole])
+  @@index([tournamentId])
+}
+
+/// Append-only audit trail of every score change.
+model TournamentScoreLog {
+  id           String     @id @default(cuid())
+  tournamentId String
+  playerId     String
+  playerName   String
+  hole         Int
+  /// ENTER | CLEAR | VALIDATE | MARSHAL_EDIT
+  action       String
+  oldStrokes   Int?
+  newStrokes   Int?
+  oldIsOut     Boolean?
+  newIsOut     Boolean?
+  actorRole    String
+  actorName    String?
+  groupCode    String?
+  reason       String?
+  createdAt    DateTime   @default(now())
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+  @@index([tournamentId, createdAt])
+}
+
+model TournamentMessage {
+  id           String     @id @default(cuid())
+  tournamentId String
+  /// control | all | marshal
+  toTarget     String
+  /// caddie | admin | marshal
+  fromRole     String
+  fromName     String
+  groupCode    String?
+  text         String     @db.Text
+  createdAt    DateTime   @default(now())
+  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+
+  @@index([tournamentId, createdAt])
 }

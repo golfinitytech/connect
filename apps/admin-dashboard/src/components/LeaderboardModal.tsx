@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Trophy, Globe, Activity, Users, Calendar, Flag, TrendingUp, Crown, Clock, Lock, Maximize, Minimize } from 'lucide-react';
 import ScoreInputModal from './ScoreInputModal';
+import api from '../services/api';
 
 interface LeaderboardModalProps {
   isOpen: boolean;
@@ -36,6 +37,9 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
   } | null>(null);
   const [isScoreModalOpen, setIsScoreModalOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // Official ranking computed by the server (gross, countback, ties).
+  const [serverBoard, setServerBoard] = useState<{ tournamentId: string; pars: number[]; byPlayer: Record<string, any>; order: Record<string, number> } | null>(null);
+  const [marshalPin, setMarshalPin] = useState<string | null>(null);
   const [selectedScoreData, setSelectedScoreData] = useState<{
     groupCode: string;
     playerId: string | number;
@@ -77,6 +81,12 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
       { num: 16, par: 3 }, { num: 17, par: 5 }, { num: 18, par: 4 },
     ]
   };
+
+  if (serverBoard?.pars?.length === 18) {
+    (['IN', 'OUT'] as const).forEach((n) => {
+      holeData[n] = holeData[n].map((h) => ({ ...h, par: serverBoard.pars[h.num - 1] ?? h.par }));
+    });
+  }
 
   const ensureNineArray = <T,>(value: any, fillValue: T): T[] => {
     const next = Array.isArray(value) ? value.slice(0, 9) : [];
@@ -223,136 +233,112 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
     setIsMarshalModalOpen(true);
   };
 
-  const syncToApi = async (flightCode: string, updatedPlayers: any[]) => {
+  const fetchServerBoard = async () => {
     try {
-      // @ts-ignore
-      const { default: api } = await import('../services/api');
-      await api.post('/tournaments/sync-scores', {
-        flightCode,
-        players: updatedPlayers
+      const res = await api.get('/tournaments/active/leaderboard');
+      const data = res.data;
+      if (!data?.entries) {
+        setServerBoard(null);
+        return;
+      }
+      const byPlayer: Record<string, any> = {};
+      const order: Record<string, number> = {};
+      data.entries.forEach((e: any, i: number) => {
+        byPlayer[e.playerId] = e;
+        order[e.playerId] = i;
       });
+      setServerBoard({ tournamentId: data.tournament.id, pars: data.tournament.pars, byPlayer, order });
     } catch (err) {
-      console.error('Failed to sync marshal score update to API:', err);
+      console.warn('Failed to fetch server leaderboard:', err);
     }
   };
 
-  const applyMarshalScoreUpdate = (payload: {
+  const apiMessage = (err: any, fallback: string) => {
+    const msg = err?.response?.data?.message;
+    if (typeof msg === 'string') return msg;
+    if (msg && typeof msg.message === 'string') return msg.message;
+    if (Array.isArray(msg)) return msg.join(', ');
+    if (!err?.response) return 'Tidak ada koneksi ke server.';
+    return fallback;
+  };
+
+  const applyMarshalScoreUpdate = async (payload: {
     groupCode: string;
     playerId: string | number;
     playerName: string;
     holeNumber: number;
     newScore: number | string | null;
   }) => {
-    const { groupCode, playerId, playerName, holeNumber, newScore } = payload;
-    const storageKey = `tournament_scores_${groupCode}`;
-    const scoresStr = localStorage.getItem(storageKey);
-    let groupPlayers: any[] = [];
-    if (scoresStr) {
-      try {
-        const parsed = JSON.parse(scoresStr);
-        if (Array.isArray(parsed)) groupPlayers = parsed;
-      } catch {}
+    const { groupCode, playerId, holeNumber, newScore } = payload;
+    const pin = marshalPin;
+    setMarshalPin(null);
+    const tournamentId = serverBoard?.tournamentId;
+    if (!pin || !tournamentId) {
+      alert('Sesi marshal tidak valid. Masukkan PIN lagi.');
+      return;
     }
-
-    if (!groupPlayers.length) {
-      try {
-        const savedTournament = localStorage.getItem('active_tournament');
-        if (savedTournament) {
-          const tournamentData = JSON.parse(savedTournament);
-          const group = (tournamentData.groups || []).find((g: any) => g.code === groupCode);
-          if (group?.players && Array.isArray(group.players)) groupPlayers = group.players;
-        }
-      } catch {}
+    const isOut = newScore === 'OUT';
+    const strokes = isOut ? null : typeof newScore === 'number' && newScore > 0 ? newScore : null;
+    if (!isOut && strokes === null) {
+      alert('Marshal harus mengisi skor atau OUT.');
+      return;
     }
-
-    if (!groupPlayers.length) return;
-
-    const playerIdx =
-      groupPlayers.findIndex((p: any) => p?.id === playerId) !== -1
-        ? groupPlayers.findIndex((p: any) => p?.id === playerId)
-        : groupPlayers.findIndex((p: any) => (p?.name || '').toString().toUpperCase() === playerName.toString().toUpperCase());
-
-    if (playerIdx === -1) return;
-
-    const activeNine = holeNumber <= 9 ? 'IN' : 'OUT';
-    const holeIndex = holeNumber <= 9 ? holeNumber - 1 : holeNumber - 10;
-
-    const nextPlayers = groupPlayers.map((p: any, idx: number) => {
-      if (idx !== playerIdx) return p;
-      const scores = p.scores || { IN: Array(9).fill(0), OUT: Array(9).fill(0) };
-      const nextScores = {
-        IN: Array.isArray(scores.IN) ? [...scores.IN] : Array(9).fill(0),
-        OUT: Array.isArray(scores.OUT) ? [...scores.OUT] : Array(9).fill(0)
-      };
-      nextScores[activeNine][holeIndex] = newScore;
-
-      const approvals = p.approvals || { IN: Array(9).fill(false), OUT: Array(9).fill(false) };
-      const nextApprovals = {
-        IN: Array.isArray(approvals.IN) ? [...approvals.IN] : Array(9).fill(false),
-        OUT: Array.isArray(approvals.OUT) ? [...approvals.OUT] : Array(9).fill(false)
-      };
-      nextApprovals[activeNine][holeIndex] = true;
-
-      const marshalEdited = p.marshalEdited || { IN: Array(9).fill(false), OUT: Array(9).fill(false) };
-      const nextMarshalEdited = {
-        IN: Array.isArray(marshalEdited.IN) ? [...marshalEdited.IN] : Array(9).fill(false),
-        OUT: Array.isArray(marshalEdited.OUT) ? [...marshalEdited.OUT] : Array(9).fill(false)
-      };
-      nextMarshalEdited[activeNine][holeIndex] = true;
-
-      return { ...p, scores: nextScores, approvals: nextApprovals, marshalEdited: nextMarshalEdited };
-    });
-
-    localStorage.setItem(storageKey, JSON.stringify(nextPlayers));
-    syncToApi(groupCode, nextPlayers);
-
-    setAllPlayersData(prev =>
-      prev.map((p: any) => {
-        if (p?.groupCode !== groupCode) return p;
-        if (p?.id !== playerId && (p?.name || '').toString().toUpperCase() !== playerName.toString().toUpperCase()) return p;
-        const scores = p.scores || { IN: Array(9).fill(0), OUT: Array(9).fill(0) };
-        const nextScores = {
-          IN: Array.isArray(scores.IN) ? [...scores.IN] : Array(9).fill(0),
-          OUT: Array.isArray(scores.OUT) ? [...scores.OUT] : Array(9).fill(0)
-        };
-        nextScores[activeNine][holeIndex] = newScore;
-        const approvals = p.approvals || { IN: Array(9).fill(false), OUT: Array(9).fill(false) };
-        const nextApprovals = {
-          IN: Array.isArray(approvals.IN) ? [...approvals.IN] : Array(9).fill(false),
-          OUT: Array.isArray(approvals.OUT) ? [...approvals.OUT] : Array(9).fill(false)
-        };
-        nextApprovals[activeNine][holeIndex] = true;
-
-        const marshalEdited = p.marshalEdited || { IN: Array(9).fill(false), OUT: Array(9).fill(false) };
-        const nextMarshalEdited = {
-          IN: Array.isArray(marshalEdited.IN) ? [...marshalEdited.IN] : Array(9).fill(false),
-          OUT: Array.isArray(marshalEdited.OUT) ? [...marshalEdited.OUT] : Array(9).fill(false)
-        };
-        nextMarshalEdited[activeNine][holeIndex] = true;
-
-        return { ...p, scores: nextScores, approvals: nextApprovals, marshalEdited: nextMarshalEdited };
-      })
-    );
+    try {
+      await api.post(`/tournaments/${tournamentId}/scores/marshal-edit`, {
+        playerId: String(playerId),
+        hole: holeNumber,
+        strokes,
+        out: isOut,
+        groupCode: String(groupCode),
+        marshalPin: pin,
+        actorName: 'Marshal',
+        reason: 'Edit dari leaderboard marshal',
+      });
+      // Show the change immediately; the next poll brings the authoritative data.
+      const nine = holeNumber <= 9 ? 'IN' : 'OUT';
+      const idx = (holeNumber - 1) % 9;
+      setAllPlayersData((prev) =>
+        prev.map((p: any) => {
+          if (p?.id !== playerId) return p;
+          const next = normalizePlayerForLeaderboard(p);
+          next.scores[nine][idx] = isOut ? 'OUT' : strokes;
+          next.approvals[nine][idx] = true;
+          next.marshalEdited[nine][idx] = true;
+          return next;
+        }),
+      );
+      fetchServerBoard();
+    } catch (err: any) {
+      alert(apiMessage(err, 'Gagal menyimpan edit marshal.'));
+    }
   };
 
-  const handleMarshalAuth = () => {
-    if (marshalPassword === '1234') {
-      setIsMarshalModalOpen(false);
+  const handleMarshalAuth = async () => {
+    const tournamentId = serverBoard?.tournamentId;
+    if (!tournamentId) {
+      alert('Data turnamen belum termuat.');
+      return;
+    }
+    try {
+      await api.post(`/tournaments/${tournamentId}/marshal/verify`, { marshalPin: marshalPassword });
+    } catch (err: any) {
+      alert(apiMessage(err, 'PIN Marshal salah!'));
       setMarshalPassword('');
-      if (marshalTarget) {
-        setSelectedScoreData({
-          groupCode: marshalTarget.groupCode,
-          playerId: marshalTarget.playerId,
-          playerName: marshalTarget.playerName,
-          holeNumber: marshalTarget.holeNumber,
-          currentScore: marshalTarget.currentScore,
-          parValue: marshalTarget.parValue
-        });
-        setIsScoreModalOpen(true);
-      }
-    } else {
-      alert('Password Marshal Salah!');
-      setMarshalPassword('');
+      return;
+    }
+    setMarshalPin(marshalPassword);
+    setIsMarshalModalOpen(false);
+    setMarshalPassword('');
+    if (marshalTarget) {
+      setSelectedScoreData({
+        groupCode: marshalTarget.groupCode,
+        playerId: marshalTarget.playerId,
+        playerName: marshalTarget.playerName,
+        holeNumber: marshalTarget.holeNumber,
+        currentScore: marshalTarget.currentScore,
+        parValue: marshalTarget.parValue
+      });
+      setIsScoreModalOpen(true);
     }
   };
 
@@ -360,10 +346,9 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
     if (!isOpen) return;
 
     const fetchLatestData = async () => {
+      fetchServerBoard();
       if (variant === 'caddie') return;
       try {
-        // @ts-ignore
-        const { default: api } = await import('../services/api');
         const response = await api.get('/tournaments/active');
         if (response.data && response.data.groups) {
           const tournament = response.data;
@@ -552,6 +537,11 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
       };
     })
     .sort((a, b) => {
+      // Official order from the server (includes countback) when available
+      const oa = serverBoard?.order?.[a.id];
+      const ob = serverBoard?.order?.[b.id];
+      if (oa !== undefined && ob !== undefined) return oa - ob;
+
       // Put OUT players at the bottom
       if (a.isOut && !b.isOut) return 1;
       if (!a.isOut && b.isOut) return -1;
@@ -571,6 +561,15 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
       
       return a.name.localeCompare(b.name);
     });
+
+  const rankLabel = (player: any, idx: number) => {
+    const e = serverBoard?.byPlayer?.[player.id];
+    if (e) {
+      const isCategory = filterMode === 'FlightA' || filterMode === 'FlightB' || filterMode === 'FlightC';
+      return isCategory ? e.categoryPositionLabel : e.positionLabel;
+    }
+    return player.isOut ? '-' : idx + 1;
+  };
 
   return (
     <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/60 backdrop-blur-md animate-in fade-in duration-300">
@@ -900,7 +899,7 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
                           idx === 1 ? 'text-slate-300' : 
                           idx === 2 ? 'text-orange-400' : 
                           'text-white'}`}>
-                          {player.isOut ? '-' : idx + 1}
+                          {rankLabel(player, idx)}
                         </span>
                       </div>
 
@@ -961,7 +960,7 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
                               <div className="flex flex-col items-center">
                                 <span className="text-[10px] text-[#ff7b5a] font-black uppercase tracking-widest mb-1.5">Rank</span>
                                 <div className={`w-14 h-14 rounded-2xl flex items-center justify-center border-2 shadow-lg ${player.isOut ? 'bg-[#b85a29]/50 border-[#ff7b5a]/50 text-[#ff7b5a]/50' : 'bg-[#14342d] border-[#ff7b5a] text-white shadow-[#ff7b5a]/20'}`}>
-                                  <span className="text-3xl font-black italic">{player.isOut ? '-' : idx + 1}</span>
+                                  <span className="text-3xl font-black italic">{rankLabel(player, idx)}</span>
                                 </div>
                               </div>
                               <div className="flex flex-col justify-end h-full pt-4">
@@ -1065,7 +1064,7 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
                         >
                           <div className="w-12 md:w-16 lg:w-20 flex items-center">
                         <span className={`text-2xl font-black italic ${player.isOut ? 'text-orange-400/50' : 'text-white'}`}>
-                          {player.isOut ? '-' : idx + 1}
+                          {rankLabel(player, idx)}
                         </span>
                       </div>
 
@@ -1125,7 +1124,7 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
                                   <div className="flex flex-col items-center">
                                     <span className="text-[10px] text-[#ff7b5a] font-black uppercase tracking-widest mb-1.5">Rank</span>
                                     <div className={`w-14 h-14 rounded-2xl flex items-center justify-center border-2 shadow-lg ${player.isOut ? 'bg-[#b85a29]/50 border-[#ff7b5a]/50 text-[#ff7b5a]/50' : 'bg-[#14342d] border-[#ff7b5a] text-white shadow-[#ff7b5a]/20'}`}>
-                                      <span className="text-3xl font-black italic">{player.isOut ? '-' : idx + 1}</span>
+                                      <span className="text-3xl font-black italic">{rankLabel(player, idx)}</span>
                                     </div>
                                   </div>
                                   <div className="flex flex-col justify-end h-full pt-4">
@@ -1284,7 +1283,7 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
                       >
                         <div className="w-8 flex items-center justify-center">
                           <span className={`text-sm font-black italic ${player.isOut ? 'text-orange-400/50' : 'text-white/80'}`}>
-                            {player.isOut ? '-' : idx + 1}
+                            {rankLabel(player, idx)}
                           </span>
                         </div>
                         
@@ -1383,7 +1382,11 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
 
       <ScoreInputModal
         isOpen={isScoreModalOpen && !!selectedScoreData}
-        onClose={() => setIsScoreModalOpen(false)}
+        onClose={() => {
+          setIsScoreModalOpen(false);
+          // keep the PIN until onSave has read it (onSave runs before onClose)
+          setTimeout(() => setMarshalPin(null), 0);
+        }}
         playerName={selectedScoreData?.playerName || ''}
         holeNumber={selectedScoreData?.holeNumber || 0}
         currentScore={selectedScoreData?.currentScore ?? null}

@@ -697,6 +697,23 @@ const TournamentPlayers = () => {
     }
   };
 
+  const handleSetMarshalPin = async () => {
+    if (!tournamentInfo?.id) return;
+    const pin = window.prompt('PIN marshal baru (4 angka):');
+    if (pin === null) return;
+    if (!/^\d{4}$/.test(pin.trim())) {
+      alert('PIN harus 4 angka.');
+      return;
+    }
+    try {
+      await api.patch(`/tournaments/${tournamentInfo.id}/settings`, { marshalPin: pin.trim() });
+      alert(`PIN marshal untuk turnamen ${tournamentInfo.code || ''} sudah diganti.`);
+    } catch (err) {
+      console.error(err);
+      alert('Gagal mengganti PIN marshal.');
+    }
+  };
+
   const deleteAllPlayers = async () => {
     if (window.confirm('CRITICAL: This will delete ALL tournament data (Players, Groups, and Scores). Are you sure?')) {
       try {
@@ -884,7 +901,7 @@ const TournamentPlayers = () => {
               groupsLocked: false
             }));
 
-            alert(`Berhasil import ${newPlayers.length} pemain. Auto-grouping belum dijalankan.`);
+            alert(`Berhasil import ${newPlayers.length} pemain. Auto-grouping belum dijalankan.\n\nKODE TURNAMEN: ${savedTournament?.code ?? '-'}\nPIN MARSHAL: ${savedTournament?.marshalPin ?? '-'}\n(Catat PIN sekarang, bisa diganti lewat tombol Atur PIN Marshal.)`);
           })
           .catch(err => {
             console.error('Error saving imported players to DB:', err);
@@ -1082,6 +1099,8 @@ const TournamentPlayers = () => {
 
     const tournamentData: any = {
       info: {
+        // Same tournament id -> server updates flights in place (tournament code stays the same)
+        id: tournamentInfo?.id,
         name: importTournamentInfo.name || tournamentInfo?.name || `Tournament ${new Date().toISOString().slice(0, 10)}`,
         course: importTournamentInfo.course || tournamentInfo?.course || currentAdminLocation,
         rules: importTournamentInfo.rules || tournamentInfo?.rules || 'Stroke Play',
@@ -1208,6 +1227,20 @@ const TournamentPlayers = () => {
                 <Trophy size={12} className="text-blue-500" />
                 <span>{tournamentInfo?.rules} • {tournamentInfo?.scoringMethod}</span>
               </div>
+              {tournamentInfo?.code && (
+                <div className="flex items-center gap-2 bg-blue-600 text-white px-3 py-1.5 rounded-lg">
+                  <span>Kode Turnamen</span>
+                  <span className="text-sm tracking-[0.3em]">{tournamentInfo.code}</span>
+                </div>
+              )}
+              {tournamentInfo?.id && (
+                <button
+                  onClick={handleSetMarshalPin}
+                  className="flex items-center gap-2 bg-orange-50 text-orange-600 px-3 py-1.5 rounded-lg border border-orange-200 hover:bg-orange-100"
+                >
+                  Atur PIN Marshal
+                </button>
+              )}
             </div>
           </div>
 

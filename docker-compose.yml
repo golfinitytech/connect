@@ -1,19 +1,20 @@
+# Optional: local PostgreSQL for offline development.
+# Production / shared dev uses Supabase (see apps/api/.env.example).
 services:
-  mysql:
-    image: mysql:8.4
-    container_name: golfinity-mysql
+  postgres:
+    image: postgres:16
+    container_name: golfinity-postgres
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: golfinity_connect
-      MYSQL_USER: golfinity
-      MYSQL_PASSWORD: golfinity
+      POSTGRES_DB: golfinity_connect
+      POSTGRES_USER: golfinity
+      POSTGRES_PASSWORD: golfinity
     ports:
-      - '3306:3306'
+      - '5432:5432'
     volumes:
-      - mysql_data:/var/lib/mysql
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'mysqladmin ping -h localhost -u root -proot']
+      test: ['CMD-SHELL', 'pg_isready -U golfinity -d golfinity_connect']
       interval: 10s
       timeout: 5s
       retries: 10
@@ -28,5 +29,5 @@ services:
       - redis_data:/data
 
 volumes:
-  mysql_data:
+  postgres_data:
   redis_data:

@@ -43,7 +43,7 @@ const CreateTournament = () => {
     tee: 'White',
     teeTime: '',
     rules: 'Stroke Play',
-    scoringMethod: 'System 36'
+    scoringMethod: 'Gross'
   });
 
   // State for Step 2: Player Data
@@ -409,6 +409,7 @@ const CreateTournament = () => {
                     onChange={(e) => setTournamentInfo({...tournamentInfo, scoringMethod: e.target.value})}
                     className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-4 px-6 outline-none focus:border-blue-500 transition-all appearance-none font-bold text-slate-800"
                   >
+                    <option>Gross</option>
                     <option>System 36</option>
                     <option>Peoria</option>
                     <option>Double Peoria</option>
@@ -954,7 +955,8 @@ const CreateTournament = () => {
                     };
                     
                     // Save to MySQL via API
-                    await api.post('/tournaments', { ...tournamentData, archivePrevious: true });
+                    const res = await api.post('/tournaments', { ...tournamentData, archivePrevious: true });
+                    const published = res.data || {};
                     
                     // Keep a copy in localStorage for immediate UI updates if needed, 
                     // but the primary source will now be the API.
@@ -967,7 +969,14 @@ const CreateTournament = () => {
                       }
                     });
 
-                    alert('Tournament Successfully Published to Database with ' + groupsWithCodes.length + ' Flight Groups!');
+                    alert(
+                      'Turnamen berhasil dipublish!\n\n' +
+                      `KODE TURNAMEN : ${published.code ?? '-'}\n` +
+                      `PIN MARSHAL   : ${published.marshalPin ?? '-'}\n` +
+                      `Jumlah flight : ${(published.groups || groupsWithCodes).length} (nomor 1-${(published.groups || groupsWithCodes).length})\n\n` +
+                      'Catat PIN marshal sekarang (hanya ditampilkan sekali, bisa diganti di halaman Tournament Players).\n' +
+                      'Di tablet: masukkan kode turnamen, lalu nomor flight.'
+                    );
                     navigate('/admin/rounds/tournament-players');
                   } catch (error) {
                     console.error('Error publishing tournament:', error);

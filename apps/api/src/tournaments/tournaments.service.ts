@@ -1,274 +1,873 @@
-import { Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, TournamentScoreStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  EnterScoreDto,
+  MarshalEditDto,
+  PostMessageDto,
+  UpdateSettingsDto,
+  ValidateScoresDto,
+} from './dto/score.dto';
+import {
+  assertValidScore,
+  buildLeaderboard,
+  generateTournamentCode,
+  normalizeCode,
+  normalizeFlightCode,
+  resolvePars,
+  ScoreValidationError,
+  toLegacyPlayer,
+} from './tournament-scoring';
+
+type Tx = Prisma.TransactionClient;
+
+/** Fields never sent to clients. */
+function publicTournament<T extends { marshalPin?: string | null }>(t: T) {
+  const { marshalPin, ...rest } = t;
+  return { ...rest, hasMarshalPin: !!marshalPin };
+}
+
+function flightFromHandicap(hcp: number) {
+  if (hcp >= 1 && hcp <= 13) return 'A';
+  if (hcp >= 14 && hcp <= 21) return 'B';
+  return 'C';
+}
+
+function randomPin() {
+  return String(1000 + Math.floor(Math.random() * 9000));
+}
 
 @Injectable()
 export class TournamentsService {
+  private readonly logger = new Logger(TournamentsService.name);
+
   constructor(private prisma: PrismaService) {}
 
-  private chatMessagesByTournamentId = new Map<string, any[]>();
+  // -------------------------------------------------------------------------
+  // Lookup helpers
+  // -------------------------------------------------------------------------
 
-  private async getActiveTournamentId(course?: string) {
-    const activeTournament = await this.prisma.tournament.findFirst({
-      where: { 
-        publishedAt: { not: null },
-        ...(course && { course })
-      },
-      orderBy: { publishedAt: 'desc' },
-      select: { id: true },
-    });
-    return activeTournament?.id || null;
+  private activeWhere(course?: string): Prisma.TournamentWhereInput {
+    return { publishedAt: { not: null }, ...(course ? { course } : {}) };
   }
 
+  private async getActiveTournament(course?: string) {
+    return this.prisma.tournament.findFirst({
+      where: this.activeWhere(course),
+      orderBy: { publishedAt: 'desc' },
+    });
+  }
+
+  private async getTournamentOrThrow(id: string) {
+    const t = await this.prisma.tournament.findUnique({ where: { id } });
+    if (!t) throw new NotFoundException('Turnamen tidak ditemukan.');
+    return t;
+  }
+
+  private async getWritableTournament(id: string) {
+    const t = await this.getTournamentOrThrow(id);
+    if (!t.publishedAt) throw new ForbiddenException('Turnamen sudah diarsipkan.');
+    if (t.finishedAt) throw new ForbiddenException('Turnamen sudah selesai, skor terkunci.');
+    return t;
+  }
+
+  private async scoreRows(tournamentId: string) {
+    return this.prisma.tournamentScore.findMany({ where: { tournamentId } });
+  }
+
+  /** Tournament with groups/players, and players carrying their scores in the legacy UI shape. */
+  private async loadFull(tournamentId: string) {
+    const t = await this.prisma.tournament.findUnique({
+      where: { id: tournamentId },
+      include: {
+        players: { orderBy: { code: 'asc' } },
+        groups: { include: { players: { orderBy: { code: 'asc' } } } },
+      },
+    });
+    if (!t) return null;
+    const rows = await this.scoreRows(t.id);
+    const rowsByPlayer = new Map<string, typeof rows>();
+    for (const r of rows) {
+      if (!rowsByPlayer.has(r.playerId)) rowsByPlayer.set(r.playerId, []);
+      rowsByPlayer.get(r.playerId)!.push(r);
+    }
+    const legacy = <P extends { id: string }>(p: P) => toLegacyPlayer(p, rowsByPlayer.get(p.id) || []);
+    const groups = [...t.groups]
+      .sort((a, b) => (a.number ?? 999) - (b.number ?? 999) || a.code.localeCompare(b.code))
+      .map((g) => ({
+        ...g,
+        caddie: g.caddieData ?? undefined,
+        players: g.players.map(legacy),
+      }));
+    return publicTournament({
+      ...t,
+      pars: resolvePars(t.pars),
+      players: t.players.map(legacy),
+      groups,
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Create / edit (never destructive to scores)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Legacy entry point used by the dashboard for both "publish" and "edit".
+   * - body.info.id of an existing tournament -> roster update in place (scores kept).
+   * - otherwise -> new tournament; the previous active tournament on the same
+   *   course is archived (never deleted).
+   */
   async create(data: any) {
-    try {
-      const info = data?.info || {};
-      const groups = Array.isArray(data?.groups) ? data.groups : [];
-      const players = Array.isArray(data?.players) ? data.players : [];
-      console.log('--- START TOURNAMENT CREATION ---');
-      console.log('Tournament Info:', JSON.stringify(info));
-      console.log('Number of Groups:', groups?.length);
+    const info = data?.info || {};
+    const existingId: string | undefined = info.id || data?.id;
+    if (existingId) {
+      const existing = await this.prisma.tournament.findUnique({ where: { id: existingId } });
+      if (existing) return this.updateRoster(existing.id, data);
+    }
+    return this.createNew(data);
+  }
 
-      const archivePrevious = !!data?.archivePrevious;
+  private async createNew(data: any) {
+    const info = data?.info || {};
+    const groups: any[] = Array.isArray(data?.groups) ? data.groups : [];
+    const looseRaw: any[] = Array.isArray(data?.players) ? data.players : [];
+    const course: string = info.course || data?.course || 'Default Course';
+    const requestedPin = (info.marshalPin || data?.marshalPin || '').toString().trim();
+    const marshalPin = /^\d{4}$/.test(requestedPin) ? requestedPin : randomPin();
+    const currentYear = new Date().getFullYear();
 
-      // 1. Either archive the previously published tournament (keep as history),
-      // or replace it (delete the active one) for normal edits/republish.
-      if (archivePrevious) {
-        await this.prisma.tournament.updateMany({
-          where: { publishedAt: { not: null } },
-          data: { publishedAt: null },
-        });
-        console.log('1. Existing published tournament archived.');
-      } else {
-        await this.prisma.tournament.deleteMany({
-          where: { publishedAt: { not: null } },
-        });
-        console.log('1. Existing published tournament replaced (deleted active).');
-      }
+    const created = await this.prisma.$transaction(async (tx) => {
+      // Archive (not delete) whatever is currently active on this course.
+      await tx.tournament.updateMany({
+        where: { publishedAt: { not: null }, course },
+        data: { publishedAt: null },
+      });
 
-      // 2. Prepare the tournament creation
-      // We create the tournament first so we can link players to it
-      const createdTournament = await this.prisma.tournament.create({
+      const active = await tx.tournament.findMany({
+        where: { publishedAt: { not: null }, code: { not: null } },
+        select: { code: true },
+      });
+      const code = generateTournamentCode(new Set(active.map((a) => a.code!)));
+
+      const t = await tx.tournament.create({
         data: {
-          name: info.name || 'Tournament Participants',
+          name: info.name || 'Tournament',
           date: new Date(info.date || new Date()),
-          course: info.course || 'Default Course',
+          course,
           teeBox: info.tee || info.teeBox || 'White',
           teeTime: info.teeTime || '07:00',
           rules: info.rules || 'Stroke Play',
-          scoringMethod: info.scoringMethod || 'System 36',
+          scoringMethod: info.scoringMethod || 'Gross',
+          code,
+          marshalPin,
+          pars: Array.isArray(info.pars) ? resolvePars(info.pars) : undefined,
           publishedAt: new Date(),
         },
       });
 
-      const tournamentSuffix = (createdTournament?.id || '').slice(-6).toUpperCase();
-      console.log('2. Base tournament created:', createdTournament.id);
+      let counter = 1;
+      const nextPlayerCode = () =>
+        `GF-${currentYear}-${code}-${(counter++).toString().padStart(3, '0')}`;
+      const playerData = (p: any) => {
+        const hcp = parseInt(p.handicap) || 0;
+        return {
+          tournamentId: t.id,
+          code: nextPlayerCode(),
+          name: (p.name || '').toString().trim() || 'Player',
+          dob: p.dob || '',
+          shirtSize: p.shirtSize || 'L',
+          phone: p.phone || '',
+          email: p.email || '',
+          handicap: hcp,
+          flight: p.flight || flightFromHandicap(hcp),
+        };
+      };
 
-      // 3. Create groups and players nested under the tournament (or players without groups)
-      let playerCounter = 1;
-      const currentYear = new Date().getFullYear();
-
-      if (groups.length > 0) {
-        for (const g of groups) {
-          await this.prisma.tournamentGroup.create({
-            data: {
-              tournament: { connect: { id: createdTournament.id } },
-              code: tournamentSuffix ? `${g.code}-${tournamentSuffix}` : g.code,
-              flightType: g.flightType,
-              caddieData: g.caddie ? g.caddie : undefined,
-              players: {
-                create: (g.players || []).map((p: any) => {
-                  const playerCode = `GF-PLY-${currentYear}-${tournamentSuffix}-${(playerCounter++).toString().padStart(4, '0')}`;
-                  const hcp = parseInt(p.handicap) || 0;
-                  let flight = p.flight;
-                  if (!flight) {
-                    if (hcp >= 1 && hcp <= 13) flight = 'A';
-                    else if (hcp >= 14 && hcp <= 21) flight = 'B';
-                    else flight = 'C';
-                  }
-                  return {
-                    tournament: { connect: { id: createdTournament.id } },
-                    code: playerCode,
-                    name: p.name,
-                    dob: p.dob || '',
-                    shirtSize: p.shirtSize || 'L',
-                    phone: p.phone || '',
-                    email: p.email || '',
-                    handicap: hcp,
-                    flight,
-                  };
-                }),
-              },
-            },
-          });
-        }
-      } else if (players.length > 0) {
-        for (const p of players) {
-          const playerCode = `GF-PLY-${currentYear}-${tournamentSuffix}-${(playerCounter++).toString().padStart(4, '0')}`;
-          const hcp = parseInt(p.handicap) || 0;
-          let flight = p.flight;
-          if (!flight) {
-            if (hcp >= 1 && hcp <= 13) flight = 'A';
-            else if (hcp >= 14 && hcp <= 21) flight = 'B';
-            else flight = 'C';
-          }
-          await this.prisma.tournamentPlayer.create({
-            data: {
-              tournament: { connect: { id: createdTournament.id } },
-              code: playerCode,
-              name: p.name,
-              dob: p.dob || '',
-              shirtSize: p.shirtSize || 'L',
-              phone: p.phone || '',
-              email: p.email || '',
-              handicap: hcp,
-              flight,
-            },
-          });
+      const groupedIds = new Set<string>();
+      for (let i = 0; i < groups.length; i++) {
+        const g = groups[i];
+        const number = i + 1;
+        const group = await tx.tournamentGroup.create({
+          data: {
+            tournamentId: t.id,
+            number,
+            code: String(number),
+            startHole: Number.isInteger(g.startHole) ? g.startHole : null,
+            flightType: g.flightType || '',
+            caddieData: g.caddie ?? undefined,
+          },
+        });
+        for (const p of g.players || []) {
+          if (p?.id !== undefined) groupedIds.add(String(p.id));
+          await tx.tournamentPlayer.create({ data: { ...playerData(p), groupId: group.id } });
         }
       }
+      for (const p of looseRaw) {
+        if (p?.id !== undefined && groupedIds.has(String(p.id))) continue;
+        await tx.tournamentPlayer.create({ data: playerData(p) });
+      }
+      return t;
+    });
 
-      console.log('3. Groups and players created successfully');
+    this.logger.log(`Tournament ${created.id} created with code ${created.code}`);
+    const full = await this.loadFull(created.id);
+    // The PIN is returned once, on creation, so the admin can hand it to marshals.
+    return { ...full, marshalPin: created.marshalPin };
+  }
 
-      // 4. Return the full tournament data
-      const result = await this.prisma.tournament.findUnique({
-        where: { id: createdTournament.id },
-        include: {
-          players: true,
-          groups: {
-            include: {
-              players: true,
-            },
-          },
+  /**
+   * Applies an edited roster to an existing tournament without touching scores.
+   * Players/groups missing from the payload are only removed when they have no scores.
+   */
+  async updateRoster(tournamentId: string, data: any) {
+    const t = await this.getTournamentOrThrow(tournamentId);
+    const info = data?.info || {};
+    const groupsIn: any[] = Array.isArray(data?.groups) ? data.groups : [];
+    const playersIn: any[] = Array.isArray(data?.players) ? data.players : [];
+    const currentYear = new Date().getFullYear();
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.tournament.update({
+        where: { id: t.id },
+        data: {
+          ...(info.name ? { name: info.name } : {}),
+          ...(info.date ? { date: new Date(info.date) } : {}),
+          ...(info.teeTime ? { teeTime: info.teeTime } : {}),
+          ...(info.tee || info.teeBox ? { teeBox: info.tee || info.teeBox } : {}),
+          ...(info.rules ? { rules: info.rules } : {}),
         },
       });
 
-      console.log('--- END TOURNAMENT CREATION ---');
-      return result;
-    } catch (error) {
-      console.error('CRITICAL ERROR in TournamentsService.create:');
-      console.error('Error Name:', error.name);
-      console.error('Error Message:', error.message);
-      if (error.code) console.error('Prisma Error Code:', error.code);
-      if (error.meta) console.error('Error Metadata:', JSON.stringify(error.meta));
-      throw error;
-    }
-  }
+      const dbGroups = await tx.tournamentGroup.findMany({ where: { tournamentId: t.id } });
+      const dbPlayers = await tx.tournamentPlayer.findMany({ where: { tournamentId: t.id } });
+      const playerById = new Map(dbPlayers.map((p) => [p.id, p]));
+      const playerByCode = new Map(dbPlayers.filter((p) => p.code).map((p) => [p.code!, p]));
+      const groupByCode = new Map(dbGroups.map((g) => [g.code, g]));
+      let maxNumber = dbGroups.reduce((m, g) => Math.max(m, g.number ?? 0), 0);
+      let counter = dbPlayers.length + 1;
 
-  async findAll(course?: string) {
-    return this.prisma.tournament.findMany({
-      where: course ? { course } : undefined,
-      include: {
-        players: true,
-        groups: {
-          include: {
-            players: true
-          }
-        },
-      },
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
-  }
+      const seenPlayers = new Set<string>();
+      const seenGroups = new Set<string>();
 
-  async findActive(course?: string) {
-    const tournament = await this.prisma.tournament.findFirst({
-      where: {
-        publishedAt: { not: null },
-        ...(course && { course })
-      },
-      include: {
-        players: true,
-        groups: {
-          include: {
-            players: true
-          }
-        },
-      },
-      orderBy: {
-        publishedAt: 'desc'
+      const upsertPlayer = async (p: any, groupId: string | null) => {
+        const existing =
+          (p?.id && playerById.get(String(p.id))) || (p?.code && playerByCode.get(String(p.code)));
+        const hcp = parseInt(p.handicap) || 0;
+        const fields = {
+          name: (p.name || '').toString().trim() || 'Player',
+          dob: p.dob || '',
+          shirtSize: p.shirtSize || 'L',
+          phone: p.phone || '',
+          email: p.email || '',
+          handicap: hcp,
+          flight: p.flight || flightFromHandicap(hcp),
+        };
+        if (existing) {
+          seenPlayers.add(existing.id);
+          await tx.tournamentPlayer.update({
+            where: { id: existing.id },
+            data: { ...fields, ...(groupId !== undefined ? { groupId } : {}) },
+          });
+        } else {
+          let code: string;
+          do {
+            code = `GF-${currentYear}-${t.code ?? 'T'}-${(counter++).toString().padStart(3, '0')}`;
+          } while (playerByCode.has(code));
+          const createdP = await tx.tournamentPlayer.create({
+            data: { tournamentId: t.id, code, groupId, ...fields },
+          });
+          seenPlayers.add(createdP.id);
+        }
+      };
+
+      for (const g of groupsIn) {
+        const code = normalizeFlightCode(g.code);
+        let group = groupByCode.get(code);
+        if (group) {
+          group = await tx.tournamentGroup.update({
+            where: { id: group.id },
+            data: {
+              flightType: g.flightType ?? group.flightType,
+              ...(g.caddie ? { caddieData: g.caddie } : {}),
+              ...(Number.isInteger(g.startHole) ? { startHole: g.startHole } : {}),
+            },
+          });
+        } else {
+          maxNumber += 1;
+          group = await tx.tournamentGroup.create({
+            data: {
+              tournamentId: t.id,
+              number: maxNumber,
+              code: String(maxNumber),
+              flightType: g.flightType || '',
+              caddieData: g.caddie ?? undefined,
+              startHole: Number.isInteger(g.startHole) ? g.startHole : null,
+            },
+          });
+        }
+        seenGroups.add(group.id);
+        for (const p of g.players || []) await upsertPlayer(p, group.id);
+      }
+      for (const p of playersIn) {
+        const known =
+          (p?.id && playerById.get(String(p.id))) || (p?.code && playerByCode.get(String(p.code)));
+        if (known && seenPlayers.has(known.id)) continue;
+        // Loose player: keep their current group if they already exist.
+        await upsertPlayer(p, known ? known.groupId : null);
+      }
+
+      // Remove players that disappeared from the payload, but never if they have scores.
+      const scored = new Set(
+        (
+          await tx.tournamentScore.findMany({
+            where: { tournamentId: t.id },
+            select: { playerId: true },
+            distinct: ['playerId'],
+          })
+        ).map((s) => s.playerId),
+      );
+      const toDelete = dbPlayers.filter((p) => !seenPlayers.has(p.id) && !scored.has(p.id));
+      if (toDelete.length) {
+        await tx.tournamentPlayer.deleteMany({ where: { id: { in: toDelete.map((p) => p.id) } } });
+      }
+      const kept = dbPlayers.filter((p) => !seenPlayers.has(p.id) && scored.has(p.id));
+      if (kept.length) {
+        this.logger.warn(
+          `Roster update for ${t.id}: kept ${kept.length} removed player(s) because they already have scores`,
+        );
+      }
+
+      // Remove empty groups that disappeared from the payload.
+      for (const g of dbGroups) {
+        if (seenGroups.has(g.id) || groupsIn.length === 0) continue;
+        const count = await tx.tournamentPlayer.count({ where: { groupId: g.id } });
+        if (count === 0) await tx.tournamentGroup.delete({ where: { id: g.id } });
       }
     });
 
-    if (tournament) {
-      // Map JSON data back to properties so frontend can use it directly
-      tournament.groups = tournament.groups.map(g => ({
-        ...g,
-        caddie: g.caddieData ? (g.caddieData as any) : undefined,
-        players: g.scoresData ? (g.scoresData as any) : g.players
-      }));
+    return this.loadFull(t.id);
+  }
+
+  async updateSettings(id: string, dto: UpdateSettingsDto) {
+    await this.getTournamentOrThrow(id);
+    await this.prisma.tournament.update({
+      where: { id },
+      data: {
+        ...(dto.marshalPin ? { marshalPin: dto.marshalPin.trim() } : {}),
+        ...(dto.pars ? { pars: dto.pars } : {}),
+        ...(dto.name ? { name: dto.name } : {}),
+      },
+    });
+    return this.loadFull(id);
+  }
+
+  async finish(id: string) {
+    await this.getTournamentOrThrow(id);
+    await this.prisma.tournament.update({ where: { id }, data: { finishedAt: new Date() } });
+    return this.loadFull(id);
+  }
+
+  async reopen(id: string) {
+    await this.getTournamentOrThrow(id);
+    await this.prisma.tournament.update({ where: { id }, data: { finishedAt: null } });
+    return this.loadFull(id);
+  }
+
+  /** Replaces the old "delete everything": archives the active tournament instead. */
+  async archiveActive(course?: string) {
+    const res = await this.prisma.tournament.updateMany({
+      where: this.activeWhere(course),
+      data: { publishedAt: null },
+    });
+    return { archived: res.count };
+  }
+
+  // -------------------------------------------------------------------------
+  // Reads
+  // -------------------------------------------------------------------------
+
+  async findAll(course?: string) {
+    const list = await this.prisma.tournament.findMany({
+      where: course ? { course } : undefined,
+      include: { players: true, groups: { include: { players: true } } },
+      orderBy: { createdAt: 'desc' },
+    });
+    return list.map(publicTournament);
+  }
+
+  async findActive(course?: string) {
+    const t = await this.getActiveTournament(course);
+    if (!t) return null;
+    return this.loadFull(t.id);
+  }
+
+  async findOne(id: string) {
+    const full = await this.loadFull(id);
+    if (!full) throw new NotFoundException('Turnamen tidak ditemukan.');
+    return full;
+  }
+
+  /** Step 1 on the tablet: tournament code -> tournament + list of flights. */
+  async accessByCode(codeRaw: string) {
+    const code = normalizeCode(codeRaw);
+    const t = await this.prisma.tournament.findFirst({
+      where: { code, publishedAt: { not: null } },
+      orderBy: { publishedAt: 'desc' },
+      include: { groups: { include: { players: { select: { id: true, name: true } } } } },
+    });
+    if (!t) throw new NotFoundException('Kode turnamen tidak ditemukan.');
+    return {
+      id: t.id,
+      code: t.code,
+      name: t.name,
+      course: t.course,
+      date: t.date,
+      teeTime: t.teeTime,
+      isFinished: !!t.finishedAt,
+      flights: [...t.groups]
+        .sort((a, b) => (a.number ?? 999) - (b.number ?? 999))
+        .map((g) => ({
+          id: g.id,
+          number: g.number,
+          code: g.code,
+          flightType: g.flightType,
+          startHole: g.startHole,
+          caddie: g.caddieData ?? null,
+          players: g.players.map((p) => p.name),
+        })),
+    };
+  }
+
+  /** Step 2 on the tablet: tournament code + flight code -> scorecard data. */
+  async accessFlight(codeRaw: string, flightRaw: string) {
+    const code = normalizeCode(codeRaw);
+    const flight = normalizeFlightCode(flightRaw);
+    const t = await this.prisma.tournament.findFirst({
+      where: { code, publishedAt: { not: null } },
+      orderBy: { publishedAt: 'desc' },
+    });
+    if (!t) throw new NotFoundException('Kode turnamen tidak ditemukan.');
+    return this.flightScorecard(t.id, flight);
+  }
+
+  async flightScorecard(tournamentId: string, flightCode: string) {
+    const t = await this.getTournamentOrThrow(tournamentId);
+    const group = await this.prisma.tournamentGroup.findFirst({
+      where: { tournamentId, code: normalizeFlightCode(flightCode) },
+      include: { players: { orderBy: { code: 'asc' } } },
+    });
+    if (!group) throw new NotFoundException('Nomor flight tidak ditemukan di turnamen ini.');
+    const rows = await this.prisma.tournamentScore.findMany({
+      where: { playerId: { in: group.players.map((p) => p.id) } },
+    });
+    return {
+      tournament: {
+        id: t.id,
+        code: t.code,
+        name: t.name,
+        course: t.course,
+        date: t.date,
+        teeTime: t.teeTime,
+        isFinished: !!t.finishedAt,
+        pars: resolvePars(t.pars),
+      },
+      flight: {
+        id: group.id,
+        number: group.number,
+        code: group.code,
+        flightType: group.flightType,
+        startHole: group.startHole,
+        caddie: group.caddieData ?? null,
+      },
+      players: group.players.map((p) =>
+        toLegacyPlayer(p, rows.filter((r) => r.playerId === p.id)),
+      ),
+    };
+  }
+
+  async leaderboard(tournamentId: string) {
+    const t = await this.prisma.tournament.findUnique({
+      where: { id: tournamentId },
+      include: { players: { include: { group: { select: { code: true } } } } },
+    });
+    if (!t) throw new NotFoundException('Turnamen tidak ditemukan.');
+    const rows = await this.scoreRows(t.id);
+    const pars = resolvePars(t.pars);
+    const entries = buildLeaderboard(
+      t.players.map((p) => ({
+        id: p.id,
+        name: p.name,
+        code: p.code,
+        flight: p.flight,
+        handicap: p.handicap,
+        groupCode: p.group?.code ?? null,
+      })),
+      rows,
+      pars,
+    );
+    return {
+      tournament: {
+        id: t.id,
+        code: t.code,
+        name: t.name,
+        course: t.course,
+        date: t.date,
+        isFinished: !!t.finishedAt,
+        pars,
+      },
+      generatedAt: new Date().toISOString(),
+      entries,
+    };
+  }
+
+  async activeLeaderboard(course?: string) {
+    const t = await this.getActiveTournament(course);
+    if (!t) return null;
+    return this.leaderboard(t.id);
+  }
+
+  async scoreLogs(tournamentId: string, limit = 200) {
+    return this.prisma.tournamentScoreLog.findMany({
+      where: { tournamentId },
+      orderBy: { createdAt: 'desc' },
+      take: Math.min(Math.max(limit, 1), 1000),
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Scoring
+  // -------------------------------------------------------------------------
+
+  private async playerInTournament(tx: Tx, tournamentId: string, playerId: string) {
+    const p = await tx.tournamentPlayer.findFirst({
+      where: { id: playerId, tournamentId },
+      include: { group: { select: { code: true } } },
+    });
+    if (!p) throw new NotFoundException('Pemain tidak terdaftar di turnamen ini.');
+    return p;
+  }
+
+  private checkScoreInput(dto: EnterScoreDto) {
+    const isOut = !!dto.out;
+    try {
+      assertValidScore(dto.hole, dto.strokes ?? null, isOut);
+    } catch (e) {
+      if (e instanceof ScoreValidationError) throw new BadRequestException(e.message);
+      throw e;
+    }
+    return isOut;
+  }
+
+  /** Caddie input. Rejected once the hole has been validated by the player. */
+  async enterScore(tournamentId: string, dto: EnterScoreDto) {
+    await this.getWritableTournament(tournamentId);
+    const isOut = this.checkScoreInput(dto);
+    const strokes = isOut ? null : (dto.strokes ?? null);
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        const player = await this.playerInTournament(tx, tournamentId, dto.playerId);
+        const existing = await tx.tournamentScore.findUnique({
+          where: { playerId_hole: { playerId: player.id, hole: dto.hole } },
+        });
+
+        if (existing?.status === TournamentScoreStatus.VALIDATED) {
+          throw new ConflictException({
+            message: 'Skor hole ini sudah dikonfirmasi player. Perubahan hanya bisa lewat marshal.',
+            code: 'SCORE_LOCKED',
+            current: existing,
+          });
+        }
+        if (
+          existing &&
+          dto.expectedVersion !== undefined &&
+          dto.expectedVersion !== existing.version
+        ) {
+          throw new ConflictException({
+            message: 'Skor sudah diubah dari device lain. Data terbaru sudah dimuat.',
+            code: 'VERSION_CONFLICT',
+            current: existing,
+          });
+        }
+
+        // Clearing an unvalidated score.
+        if (!isOut && strokes === null) {
+          if (existing) {
+            await tx.tournamentScore.delete({ where: { id: existing.id } });
+            await tx.tournamentScoreLog.create({
+              data: {
+                tournamentId,
+                playerId: player.id,
+                playerName: player.name,
+                hole: dto.hole,
+                action: 'CLEAR',
+                oldStrokes: existing.strokes,
+                oldIsOut: existing.isOut,
+                actorRole: 'caddie',
+                actorName: dto.actorName,
+                groupCode: player.group?.code ?? dto.groupCode,
+              },
+            });
+          }
+          return { playerId: player.id, hole: dto.hole, cleared: true };
+        }
+
+        // OUT is final immediately (same as the previous UI behaviour).
+        const status = isOut ? TournamentScoreStatus.VALIDATED : TournamentScoreStatus.ENTERED;
+        const saved = existing
+          ? await tx.tournamentScore.update({
+              where: { id: existing.id },
+              data: {
+                strokes,
+                isOut,
+                status,
+                enteredBy: dto.actorName,
+                version: { increment: 1 },
+                ...(isOut ? { validatedAt: new Date(), validatedBy: dto.actorName } : {}),
+              },
+            })
+          : await tx.tournamentScore.create({
+              data: {
+                tournamentId,
+                playerId: player.id,
+                hole: dto.hole,
+                strokes,
+                isOut,
+                status,
+                enteredBy: dto.actorName,
+                ...(isOut ? { validatedAt: new Date(), validatedBy: dto.actorName } : {}),
+              },
+            });
+
+        await tx.tournamentScoreLog.create({
+          data: {
+            tournamentId,
+            playerId: player.id,
+            playerName: player.name,
+            hole: dto.hole,
+            action: 'ENTER',
+            oldStrokes: existing?.strokes ?? null,
+            newStrokes: strokes,
+            oldIsOut: existing?.isOut ?? null,
+            newIsOut: isOut,
+            actorRole: 'caddie',
+            actorName: dto.actorName,
+            groupCode: player.group?.code ?? dto.groupCode,
+          },
+        });
+        return saved;
+      });
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        throw new ConflictException({
+          message: 'Skor sedang disimpan dari device lain. Coba lagi.',
+          code: 'VERSION_CONFLICT',
+        });
+      }
+      throw e;
+    }
+  }
+
+  /** Player confirms the entered scores for the given holes. */
+  async validateScores(tournamentId: string, dto: ValidateScoresDto) {
+    await this.getWritableTournament(tournamentId);
+    return this.prisma.$transaction(async (tx) => {
+      const players = await tx.tournamentPlayer.findMany({
+        where: { id: { in: dto.playerIds }, tournamentId },
+        include: { group: { select: { code: true } } },
+      });
+      if (players.length !== new Set(dto.playerIds).size) {
+        throw new NotFoundException('Ada pemain yang tidak terdaftar di turnamen ini.');
+      }
+      const rows = await tx.tournamentScore.findMany({
+        where: {
+          playerId: { in: dto.playerIds },
+          hole: { in: dto.holes },
+          status: TournamentScoreStatus.ENTERED,
+          strokes: { not: null },
+        },
+      });
+      const now = new Date();
+      for (const r of rows) {
+        await tx.tournamentScore.update({
+          where: { id: r.id },
+          data: {
+            status: TournamentScoreStatus.VALIDATED,
+            validatedAt: now,
+            validatedBy: dto.validatedBy,
+            version: { increment: 1 },
+          },
+        });
+        const p = players.find((x) => x.id === r.playerId)!;
+        await tx.tournamentScoreLog.create({
+          data: {
+            tournamentId,
+            playerId: p.id,
+            playerName: p.name,
+            hole: r.hole,
+            action: 'VALIDATE',
+            oldStrokes: r.strokes,
+            newStrokes: r.strokes,
+            actorRole: 'player',
+            actorName: dto.validatedBy || p.name,
+            groupCode: p.group?.code ?? dto.groupCode,
+          },
+        });
+      }
+      return { validated: rows.length };
+    });
+  }
+
+  private async checkMarshalPin(tournamentId: string, pin: string) {
+    const t = await this.getTournamentOrThrow(tournamentId);
+    const expected = t.marshalPin || process.env.MARSHAL_PIN;
+    if (!expected) throw new ForbiddenException('PIN marshal belum diatur untuk turnamen ini.');
+    if ((pin || '').trim() !== expected) throw new ForbiddenException('PIN marshal salah.');
+    return t;
+  }
+
+  async verifyMarshal(tournamentId: string, pin: string) {
+    await this.checkMarshalPin(tournamentId, pin);
+    return { ok: true };
+  }
+
+  /** Marshal edit: the only way to change a validated score. Always logged. */
+  async marshalEdit(tournamentId: string, dto: MarshalEditDto) {
+    await this.checkMarshalPin(tournamentId, dto.marshalPin);
+    await this.getWritableTournament(tournamentId);
+    const isOut = this.checkScoreInput(dto);
+    const strokes = isOut ? null : (dto.strokes ?? null);
+    if (!isOut && strokes === null) {
+      throw new BadRequestException('Marshal harus mengisi skor atau OUT.');
     }
 
-    return tournament;
+    return this.prisma.$transaction(async (tx) => {
+      const player = await this.playerInTournament(tx, tournamentId, dto.playerId);
+      const existing = await tx.tournamentScore.findUnique({
+        where: { playerId_hole: { playerId: player.id, hole: dto.hole } },
+      });
+      const data = {
+        strokes,
+        isOut,
+        status: TournamentScoreStatus.VALIDATED,
+        editedByMarshal: true,
+        validatedAt: new Date(),
+        validatedBy: dto.actorName ? `Marshal ${dto.actorName}` : 'Marshal',
+      };
+      const saved = existing
+        ? await tx.tournamentScore.update({
+            where: { id: existing.id },
+            data: { ...data, version: { increment: 1 } },
+          })
+        : await tx.tournamentScore.create({
+            data: { tournamentId, playerId: player.id, hole: dto.hole, ...data },
+          });
+      await tx.tournamentScoreLog.create({
+        data: {
+          tournamentId,
+          playerId: player.id,
+          playerName: player.name,
+          hole: dto.hole,
+          action: 'MARSHAL_EDIT',
+          oldStrokes: existing?.strokes ?? null,
+          newStrokes: strokes,
+          oldIsOut: existing?.isOut ?? null,
+          newIsOut: isOut,
+          actorRole: 'marshal',
+          actorName: dto.actorName,
+          groupCode: player.group?.code ?? dto.groupCode,
+          reason: dto.reason,
+        },
+      });
+      return saved;
+    });
   }
 
-  async syncScores(flightCode: string, players: any[], caddie?: any, course?: string) {
-    const activeTournamentId = await this.getActiveTournamentId(course);
-    if (!activeTournamentId) return null;
-
+  /** Legacy endpoint: tablets used to push the whole score blob. Now only the caddie assignment is stored. */
+  async syncCaddie(flightCode: string, caddie?: any, course?: string) {
+    if (!caddie) return null;
+    const t = await this.getActiveTournament(course);
+    if (!t) return null;
     const group = await this.prisma.tournamentGroup.findFirst({
-      where: {
-        tournamentId: activeTournamentId,
-        code: flightCode,
-      },
-      select: { id: true },
+      where: { tournamentId: t.id, code: normalizeFlightCode(flightCode) },
     });
-
     if (!group) return null;
-
-    return await this.prisma.tournamentGroup.update({
+    return this.prisma.tournamentGroup.update({
       where: { id: group.id },
-      data: {
-        scoresData: players,
-        ...(caddie ? { caddieData: caddie } : {}),
-      },
+      data: { caddieData: caddie },
     });
   }
 
-  async appendChatMessage(data: { to: 'control' | 'all' | 'marshal', fromRole: 'caddie' | 'admin' | 'marshal', from: string, text: string, course?: string }) {
-    const activeTournamentId = await this.getActiveTournamentId(data.course);
-    if (!activeTournamentId) return null;
+  // -------------------------------------------------------------------------
+  // Messages (persisted)
+  // -------------------------------------------------------------------------
 
-    const text = (data?.text || '').toString().trim();
-    if (!text) return null;
-
-    const msg = {
-      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      ts: Date.now(),
-      to: data.to,
-      fromRole: data.fromRole,
-      from: (data.from || '').toString(),
-      text,
+  private toLegacyMessage(m: {
+    id: string;
+    createdAt: Date;
+    toTarget: string;
+    fromRole: string;
+    fromName: string;
+    groupCode: string | null;
+    text: string;
+  }) {
+    return {
+      id: m.id,
+      ts: m.createdAt.getTime(),
+      to: m.toTarget,
+      fromRole: m.fromRole,
+      from: m.fromName,
+      groupCode: m.groupCode,
+      text: m.text,
     };
+  }
 
-    const existing = this.chatMessagesByTournamentId.get(activeTournamentId) || [];
-    const next = [...existing, msg].slice(-500);
-    this.chatMessagesByTournamentId.set(activeTournamentId, next);
-    return msg;
+  async postMessage(tournamentId: string, dto: PostMessageDto) {
+    await this.getTournamentOrThrow(tournamentId);
+    const text = (dto.text || '').trim();
+    if (!text) throw new BadRequestException('Pesan kosong.');
+    const m = await this.prisma.tournamentMessage.create({
+      data: {
+        tournamentId,
+        toTarget: dto.to,
+        fromRole: dto.fromRole,
+        fromName: (dto.from || '').toString(),
+        groupCode: dto.groupCode ?? null,
+        text,
+      },
+    });
+    return this.toLegacyMessage(m);
+  }
+
+  async getMessages(tournamentId: string, since?: number) {
+    const list = await this.prisma.tournamentMessage.findMany({
+      where: {
+        tournamentId,
+        ...(since ? { createdAt: { gt: new Date(since) } } : {}),
+      },
+      orderBy: { createdAt: 'asc' },
+      take: 500,
+    });
+    return list.map((m) => this.toLegacyMessage(m));
+  }
+
+  /** Legacy /tournaments/chat (active tournament for the course). */
+  async appendChatMessage(dto: PostMessageDto) {
+    const t = await this.getActiveTournament(dto.course);
+    if (!t) return null;
+    return this.postMessage(t.id, dto);
   }
 
   async getChatMessages(since?: number, course?: string) {
-    const activeTournamentId = await this.getActiveTournamentId(course);
-    if (!activeTournamentId) return [];
-    const existing = this.chatMessagesByTournamentId.get(activeTournamentId) || [];
-    if (!since) return existing;
-    return existing.filter((m: any) => (m?.ts || 0) > since);
-  }
-
-  async deleteAll() {
-    try {
-      // With Cascade Delete set up in schema, deleting from Tournament 
-      // will automatically clean up Players and Groups.
-      // We only need to delete the main Tournament entries.
-      return await this.prisma.tournament.deleteMany();
-    } catch (error) {
-      console.error('Database delete error:', error);
-      throw error;
-    }
-  }
-
-  // Record Caddie Mode Round
-  async recordCaddieRound(data: any) {
-    return { success: true, message: 'Caddie round recorded (mock implementation)' };
+    const t = await this.getActiveTournament(course);
+    if (!t) return [];
+    return this.getMessages(t.id, since);
   }
 }

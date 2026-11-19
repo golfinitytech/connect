@@ -51,8 +51,8 @@ export class EmailService {
     ctaText?: string,
     ctaUrl?: string,
   ) {
-    const user = await this.prisma.user.findUnique({
-      where: { email: to },
+    const user = await this.prisma.user.findFirst({
+      where: { email: { equals: to, mode: 'insensitive' } },
       include: { preference: true },
     });
 

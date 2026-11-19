@@ -7,6 +7,7 @@
     "build": "npm -ws run build",
     "prisma:generate": "npm -w apps/api run prisma:generate",
     "prisma:migrate": "npm -w apps/api run prisma:migrate",
+    "prisma:push": "npm -w apps/api run prisma:push",
     "postinstall": "patch-package"
   },
   "private": true,
