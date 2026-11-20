@@ -1,18 +1,24 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { LayoutDashboard, Users, UserCog, BookOpen, BarChart3, Settings, Plus, ChevronRight } from 'lucide-react';
+import { Users, UserCog, BookOpen, BarChart3, Plus, ChevronRight } from 'lucide-react';
+import { useStats } from '../../services/academyApi';
+import type { AdminStats } from '../../services/academyApi';
+import AccountModal from './AccountModal';
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
+  const [adding, setAdding] = useState(false);
+  const { data: st } = useStats<AdminStats>();
   const stats = [
-    { label: 'Total Students', value: '156', icon: <Users className="text-blue-600" />, bg: 'bg-blue-50' },
-    { label: 'Total Coaches', value: '24', icon: <UserCog className="text-amber-600" />, bg: 'bg-amber-50' },
-    { label: 'Active Programs', value: '8', icon: <BookOpen className="text-emerald-600" />, bg: 'bg-emerald-50' },
-    { label: 'Revenue Growth', value: '+12%', icon: <BarChart3 className="text-purple-600" />, bg: 'bg-purple-50' },
+    { label: 'Total Students', value: st?.students ?? '…', icon: <Users className="text-blue-600" />, bg: 'bg-blue-50' },
+    { label: 'Total Coaches', value: st?.coaches ?? '…', icon: <UserCog className="text-amber-600" />, bg: 'bg-amber-50' },
+    { label: 'Active Programs', value: st?.programs ?? '…', icon: <BookOpen className="text-emerald-600" />, bg: 'bg-emerald-50' },
+    { label: 'Sesi Bulan Ini', value: st?.sessionsThisMonth ?? '…', icon: <BarChart3 className="text-purple-600" />, bg: 'bg-purple-50' },
   ];
 
   return (
     <div className="space-y-10 animate-in fade-in duration-500">
+      {adding && <AccountModal role="STUDENT" onClose={() => setAdding(false)} />}
       {/* Welcome Section */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -20,7 +26,7 @@ const AdminDashboard = () => {
           <p className="text-gray-500 mt-2 text-lg">Kelola seluruh operasional hub dan kurikulum Golfinity.</p>
         </div>
         <div className="flex items-center gap-3">
-          <button className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-2xl text-sm font-bold shadow-lg shadow-emerald-200 transition-all flex items-center gap-2">
+          <button onClick={() => setAdding(true)} className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-2xl text-sm font-bold shadow-lg shadow-emerald-200 transition-all flex items-center gap-2">
             <Plus size={18} /> Add New Student
           </button>
         </div>

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Mail, Lock, ChevronRight, Loader2, User, Users, ShieldCheck, AlertCircle } from 'lucide-react';
-import { coachAccounts, adminAccounts, studentAccounts } from '../../data/authData';
+import { academyLogin, apiErrorMessage } from '../../services/academyApi';
 
 const LoginPage = () => {
   const navigate = useNavigate();
@@ -11,51 +11,23 @@ const LoginPage = () => {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
-
-    // Simulate login delay
-    setTimeout(() => {
-      let isValid = false;
-      
-      if (role === 'coach') {
-        isValid = coachAccounts.some(acc => acc.username === email && acc.password === password);
-      } else if (role === 'admin') {
-        isValid = adminAccounts.some(acc => acc.username === email && acc.password === password);
-      } else {
-        isValid = studentAccounts.some(acc => acc.username === email && acc.password === password);
-      }
-
+    try {
+      const account = await academyLogin(email, password, role);
+      navigate(`/portalakademik/${account.role}/dashboard`);
+    } catch (err) {
+      const status = (err as any)?.response?.status;
+      setError(
+        status === 401
+          ? 'Email atau password salah. Silakan coba lagi.'
+          : apiErrorMessage(err, 'Tidak dapat terhubung ke server. Coba lagi.'),
+      );
+    } finally {
       setLoading(false);
-
-      if (isValid) {
-        // Find user data to store
-        let userData;
-        if (role === 'coach') {
-          userData = coachAccounts.find(acc => acc.username === email && acc.password === password);
-        } else if (role === 'admin') {
-          userData = adminAccounts.find(acc => acc.username === email && acc.password === password);
-        } else {
-          userData = studentAccounts.find(acc => acc.username === email && acc.password === password);
-        }
-
-        if (userData) {
-          localStorage.setItem('portalUser', JSON.stringify({ ...userData, role }));
-        }
-
-        if (role === 'student') {
-          navigate('/portalakademik/student/dashboard');
-        } else if (role === 'coach') {
-          navigate('/portalakademik/coach/dashboard');
-        } else {
-          navigate('/portalakademik/admin/dashboard');
-        }
-      } else {
-        setError('Email atau password salah. Silakan coba lagi.');
-      }
-    }, 1500);
+    }
   };
 
   const roles = [

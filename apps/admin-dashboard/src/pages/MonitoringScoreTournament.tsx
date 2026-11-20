@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Trophy, Activity, Users, Clock, Maximize, Crown } from 'lucide-react';
 import api from '../services/api';
+import { BoardSkeleton, LiveSyncBadge } from '../components/ui/Loading';
 
 // Only scores confirmed by the player (or set by a marshal) count, same as the official ranking.
 const isConfirmed = (player: any, nine: 'IN' | 'OUT', idx: number) =>
@@ -8,6 +9,11 @@ const isConfirmed = (player: any, nine: 'IN' | 'OUT', idx: number) =>
 
 const MonitoringScoreTournament = () => {
   const [currentTime, setCurrentTime] = useState(new Date());
+  // TV screen: never cover the board. `boardLoaded` only gates the empty-state skeleton;
+  // refresh health is shown by <LiveSyncBadge />.
+  const [boardLoaded, setBoardLoaded] = useState(false);
+  const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null);
+  const [syncFailing, setSyncFailing] = useState(false);
   const [filterMode, setFilterMode] = useState<'Group' | 'Flight' | 'Overall' | 'FlightA' | 'FlightB' | 'FlightC'>('Overall');
   const [serverBoard, setServerBoard] = useState<{ pars: number[]; byPlayer: Record<string, any>; order: Record<string, number> } | null>(null);
   const [allPlayersData, setAllPlayersData] = useState<any[]>([]);
@@ -60,7 +66,9 @@ const MonitoringScoreTournament = () => {
   useEffect(() => {
     const fetchServerBoard = async () => {
       try {
-        const res = await api.get('/tournaments/active/leaderboard');
+        const res = await api.get('/tournaments/active/leaderboard', { silent: true });
+        setLastSyncAt(new Date());
+        setSyncFailing(false);
         if (!res.data?.entries) return setServerBoard(null);
         const byPlayer: Record<string, any> = {};
         const order: Record<string, number> = {};
@@ -71,13 +79,14 @@ const MonitoringScoreTournament = () => {
         setServerBoard({ pars: res.data.tournament.pars, byPlayer, order });
       } catch (err) {
         console.warn('Failed to fetch server leaderboard:', err);
+        setSyncFailing(true);
       }
     };
 
     const fetchLatestData = async () => {
-      fetchServerBoard();
+      const board = fetchServerBoard();
       try {
-        const response = await api.get('/tournaments/active');
+        const response = await api.get('/tournaments/active', { silent: true });
         if (response.data && response.data.groups) {
           const tournament = response.data;
           localStorage.setItem('active_tournament', JSON.stringify(tournament));
@@ -93,6 +102,7 @@ const MonitoringScoreTournament = () => {
       } catch (err) {
         console.warn('Failed to fetch latest tournament data for leaderboard sync:', err);
       }
+      await board;
     };
 
     const loadData = () => {
@@ -136,11 +146,22 @@ const MonitoringScoreTournament = () => {
       setAllPlayersData(collectedPlayers);
     };
 
-    loadData();
-    fetchLatestData().then(loadData);
-    const interval = setInterval(() => {
-      fetchLatestData().then(loadData);
-    }, 5000);
+    // Skip a tick while the previous refresh is still in flight instead of piling up requests.
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        await fetchLatestData();
+        loadData();
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    loadData(); // show cached data immediately
+    refresh().finally(() => setBoardLoaded(true));
+    const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
   }, []);
 
@@ -386,12 +407,15 @@ const MonitoringScoreTournament = () => {
               <img src="/logo1.png" alt="Logo" className="h-6 w-auto object-contain brightness-0 invert" />
               <span className="text-[12px] font-black uppercase tracking-widest text-white">GolfinityConnect Monitoring</span>
             </div>
+            <div className="flex items-center gap-3">
+            <LiveSyncBadge lastSyncAt={lastSyncAt} failing={syncFailing} now={currentTime} />
             <button
               onClick={toggleFullscreen}
               className="p-2 bg-white/10 hover:bg-white/20 rounded-xl border border-white/10 transition-all text-white/70 hover:text-white"
             >
               <Maximize size={20} />
             </button>
+            </div>
           </div>
 
           <div className="flex flex-col flex-1 overflow-hidden">
@@ -405,6 +429,8 @@ const MonitoringScoreTournament = () => {
                   <span className="w-24 md:w-32 lg:w-40 text-[10px] font-black text-white/70 uppercase tracking-widest text-center">Total Score (Gross)</span>
                   <span className="w-16 md:w-20 lg:w-24 text-[10px] font-black text-white/70 uppercase tracking-widest text-center">Hole</span>
                 </div>
+
+                {!boardLoaded && sortedPlayers.length === 0 && <BoardSkeleton rows={8} />}
 
                 {/* Top 4 Players - Sticky/Fixed at the top */}
                 {sortedPlayers.slice(0, 4).map((player: any, idx: number) => {
@@ -585,12 +611,12 @@ const MonitoringScoreTournament = () => {
                     </React.Fragment>
                   );
                 })
-              ) : (
+              ) : boardLoaded && sortedPlayers.length === 0 ? (
                 <div className="flex flex-col items-center justify-center h-full opacity-10">
                   <Activity size={200} className="text-white mb-10 animate-pulse" />
                   <span className="text-5xl font-black text-white uppercase tracking-[0.6em] italic">No Tournament Data</span>
                 </div>
-              )}
+              ) : null}
             </div>
             </>
           ) : (
@@ -608,6 +634,7 @@ const MonitoringScoreTournament = () => {
                 <span className="w-16 text-[10px] font-black text-white/70 uppercase tracking-widest text-center">Gross</span>
               </div>
               <div id="monitoring-detailed-score-scroll" className="flex-1 overflow-y-auto custom-scrollbar-dark scroll-smooth">
+                {!boardLoaded && sortedPlayers.length === 0 && <BoardSkeleton rows={8} />}
                 {sortedPlayers.map((player: any, idx: number) => {
                   return (
                     <div 

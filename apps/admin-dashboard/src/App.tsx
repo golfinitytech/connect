@@ -68,10 +68,12 @@ import Feedback from './pages/portal-akademik/Feedback';
 import Curriculum from './pages/portal-akademik/Curriculum';
 import StudentSyllabus from './pages/portal-akademik/StudentSyllabus';
 import Reports from './pages/portal-akademik/Reports';
+import { GlobalProgressBar } from './components/ui/Loading';
 
 function App() {
   return (
     <Router>
+      <GlobalProgressBar />
       <Routes>
         <Route path="/" element={<LandingPage />} />
 

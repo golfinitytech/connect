@@ -9,6 +9,8 @@ import { MenuModule } from './menu/menu.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { OrdersModule } from './orders/orders.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { StorageModule } from './storage/storage.module';
+import { AcademyModule } from './academy/academy.module';
 import { RoundsModule } from './rounds/rounds.module';
 import { UsersModule } from './users/users.module';
 import { MailModule } from './mail/mail.module';
@@ -24,6 +26,7 @@ import { CaddiePerformanceModule } from './caddie-performance/caddie-performance
       isGlobal: true,
     }),
     PrismaModule,
+    StorageModule,
     MailModule,
     FirebaseModule,
     AuthModule,
@@ -39,6 +42,7 @@ import { CaddiePerformanceModule } from './caddie-performance/caddie-performance
     TournamentsModule,
     AdminNotificationModule,
     CaddiePerformanceModule,
+    AcademyModule,
   ],
   controllers: [AppController],
   providers: [],

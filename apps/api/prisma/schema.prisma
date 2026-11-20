@@ -4,9 +4,9 @@ generator client {
 
 datasource db {
   provider  = "postgresql"
-  // Supabase: pooled connection (port 6543, ?pgbouncer=true) used by the app at runtime
+  // Supabase: session pooler (port 5432) used by the app at runtime
   url       = env("DATABASE_URL")
-  // Supabase: direct connection (port 5432) used by `prisma db push` / migrations
+  // Supabase: session pooler (port 5432) used by migrations
   directUrl = env("DIRECT_URL")
 }
 
@@ -50,31 +50,31 @@ enum PrivacyMode {
 }
 
 model User {
-  id            String        @id @default(cuid())
-  email         String        @unique
-  fullName      String
-  password      String?
-  memberId      String        @unique
-  avatarUrl     String?
-  fcmToken      String?
-  handicapIndex Decimal       @db.Decimal(4, 1)
-  emailVerified DateTime?
-  lastLoginAt   DateTime?
-  lastSeenAt    DateTime?
-  lastSeenLat   Float?
-  lastSeenLng   Float?
-  facePhotoPath String?
+  id                 String              @id @default(cuid())
+  email              String              @unique
+  fullName           String
+  password           String?
+  memberId           String              @unique
+  avatarUrl          String?
+  fcmToken           String?
+  handicapIndex      Decimal             @db.Decimal(4, 1)
+  emailVerified      DateTime?
+  lastLoginAt        DateTime?
+  lastSeenAt         DateTime?
+  lastSeenLat        Float?
+  lastSeenLng        Float?
+  facePhotoPath      String?
   facePhotoUpdatedAt DateTime?
-  verificationToken String?   @unique
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
-  roundPlayers  RoundPlayer[]
-  holeScores    HoleScore[]
-  orders        Order[]
+  verificationToken  String?             @unique
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  roundPlayers       RoundPlayer[]
+  holeScores         HoleScore[]
+  orders             Order[]
   eventRegistrations EventRegistration[]
-  notifications Notification[]
-  preference    UserPreference?
-  passwordResets PasswordReset[]
+  notifications      Notification[]
+  preference         UserPreference?
+  passwordResets     PasswordReset[]
 }
 
 model PasswordReset {
@@ -91,31 +91,31 @@ model PasswordReset {
 }
 
 model Course {
-  id           String    @id @default(cuid())
-  name         String
-  city         String
-  country      String
-  imageUrl     String?
-  totalHoles   Int       @default(18)
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  holes        Hole[]
-  teeBoxes     TeeBox[]
-  rounds       Round[]
-  events       Event[]
+  id         String   @id @default(cuid())
+  name       String
+  city       String
+  country    String
+  imageUrl   String?
+  totalHoles Int      @default(18)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  holes      Hole[]
+  teeBoxes   TeeBox[]
+  rounds     Round[]
+  events     Event[]
 }
 
 model Hole {
-  id        String   @id @default(cuid())
+  id        String      @id @default(cuid())
   courseId  String
   number    Int
   par       Int
   lengthYds Int
   latitude  Float?
   longitude Float?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+  course    Course      @relation(fields: [courseId], references: [id], onDelete: Cascade)
   scores    HoleScore[]
 
   @@unique([courseId, number])
@@ -135,20 +135,20 @@ model TeeBox {
 }
 
 model Round {
-  id             String        @id @default(cuid())
-  courseId       String
-  teeBoxId       String
-  gameMode       GameMode
-  status         RoundStatus   @default(DRAFT)
-  startedAt      DateTime?
-  finishedAt     DateTime?
-  currentHole    Int           @default(1)
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
-  course         Course        @relation(fields: [courseId], references: [id])
-  teeBox         TeeBox        @relation(fields: [teeBoxId], references: [id])
-  players        RoundPlayer[]
-  holeScores     HoleScore[]
+  id          String        @id @default(cuid())
+  courseId    String
+  teeBoxId    String
+  gameMode    GameMode
+  status      RoundStatus   @default(DRAFT)
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  currentHole Int           @default(1)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  course      Course        @relation(fields: [courseId], references: [id])
+  teeBox      TeeBox        @relation(fields: [teeBoxId], references: [id])
+  players     RoundPlayer[]
+  holeScores  HoleScore[]
 }
 
 model RoundPlayer {
@@ -164,33 +164,33 @@ model RoundPlayer {
 }
 
 model HoleScore {
-  id           String      @id @default(cuid())
-  roundId      String
-  holeId       String
-  userId       String
-  strokes      Int
-  putts        Int
-  fairwayHit   FairwayHit?
-  gir          Boolean?
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
-  round        Round       @relation(fields: [roundId], references: [id], onDelete: Cascade)
-  hole         Hole        @relation(fields: [holeId], references: [id], onDelete: Cascade)
-  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id         String      @id @default(cuid())
+  roundId    String
+  holeId     String
+  userId     String
+  strokes    Int
+  putts      Int
+  fairwayHit FairwayHit?
+  gir        Boolean?
+  createdAt  DateTime    @default(now())
+  updatedAt  DateTime    @updatedAt
+  round      Round       @relation(fields: [roundId], references: [id], onDelete: Cascade)
+  hole       Hole        @relation(fields: [holeId], references: [id], onDelete: Cascade)
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([roundId, holeId, userId])
 }
 
 model Event {
-  id          String    @id @default(cuid())
-  title       String
-  subtitle    String?
-  imageUrl    String?
-  startDate   DateTime
-  courseId    String
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  course      Course    @relation(fields: [courseId], references: [id])
+  id            String              @id @default(cuid())
+  title         String
+  subtitle      String?
+  imageUrl      String?
+  startDate     DateTime
+  courseId      String
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  course        Course              @relation(fields: [courseId], references: [id])
   registrations EventRegistration[]
 }
 
@@ -252,21 +252,21 @@ model MenuItem {
 }
 
 model Order {
-  id          String           @id @default(cuid())
-  userId      String
-  roundId     String?
-  locationId  String?          // e.g. karawang, sulaiman, jatinangor
-  caddieCode  String?          // e.g. 139
-  holeNumber  Int?
-  status      OrderStatus      @default(PENDING)
-  subtotal    Decimal          @db.Decimal(10, 2)
-  serviceFee  Decimal          @db.Decimal(10, 2)
-  totalPaid   Decimal          @db.Decimal(10, 2)
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
-  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  items       OrderItem[]
-  statusLogs  OrderStatusLog[]
+  id         String           @id @default(cuid())
+  userId     String
+  roundId    String?
+  locationId String? // e.g. karawang, sulaiman, jatinangor
+  caddieCode String? // e.g. 139
+  holeNumber Int?
+  status     OrderStatus      @default(PENDING)
+  subtotal   Decimal          @db.Decimal(10, 2)
+  serviceFee Decimal          @db.Decimal(10, 2)
+  totalPaid  Decimal          @db.Decimal(10, 2)
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  items      OrderItem[]
+  statusLogs OrderStatusLog[]
 }
 
 model OrderItem {
@@ -290,7 +290,7 @@ model OrderStatusLog {
 }
 
 model Tournament {
-  id            String            @id @default(cuid())
+  id            String               @id @default(cuid())
   name          String
   date          DateTime
   course        String
@@ -306,8 +306,8 @@ model Tournament {
   marshalPin    String?
   publishedAt   DateTime?
   finishedAt    DateTime?
-  createdAt     DateTime          @default(now())
-  updatedAt     DateTime          @updatedAt
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
   players       TournamentPlayer[]
   groups        TournamentGroup[]
   scores        TournamentScore[]
@@ -318,7 +318,7 @@ model Tournament {
 }
 
 model TournamentPlayer {
-  id           String     @id @default(cuid())
+  id           String            @id @default(cuid())
   tournamentId String
   code         String?
   name         String
@@ -328,9 +328,9 @@ model TournamentPlayer {
   email        String?
   handicap     Int
   flight       String
-  tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  tournament   Tournament        @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
   groupId      String?
-  group        TournamentGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  group        TournamentGroup?  @relation(fields: [groupId], references: [id], onDelete: SetNull)
   scores       TournamentScore[]
 
   @@unique([tournamentId, code])
@@ -372,13 +372,13 @@ model AdminNotification {
 }
 
 model CaddiePerformance {
-  id          String   @id @default(cuid())
-  locationId  String
-  caddieCode  String
-  playerName  String
-  date        DateTime @default(now())
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         String   @id @default(cuid())
+  locationId String
+  caddieCode String
+  playerName String
+  date       DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 }
 
 enum TournamentScoreStatus {
@@ -448,4 +448,242 @@ model TournamentMessage {
   tournament   Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
 
   @@index([tournamentId, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Portal Akademik (academy) — used by apps/admin-dashboard /portalakademik
+// ─────────────────────────────────────────────────────────────
+
+enum AcademyRole {
+  STUDENT
+  COACH
+  ADMIN
+}
+
+enum AcademyAccountStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum AcademyProgressStatus {
+  LOCKED
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+}
+
+enum AcademySessionStatus {
+  UPCOMING
+  ONGOING
+  COMPLETED
+  CANCELLED
+}
+
+enum AcademyEvaluationStatus {
+  PENDING
+  COMPLETED
+}
+
+enum AcademyContentType {
+  BOOKLET
+  VIDEO
+  ARTICLE
+  COACH_TIP
+}
+
+model AcademyAccount {
+  id                String               @id @default(cuid())
+  email             String               @unique
+  passwordHash      String
+  name              String
+  role              AcademyRole
+  status            AcademyAccountStatus @default(ACTIVE)
+  avatarUrl         String?
+  phone             String?
+  // Coach-only
+  specialty         String?
+  rating            Decimal?             @db.Decimal(2, 1)
+  // Student-only
+  coachId           String?
+  coach             AcademyAccount?      @relation("CoachStudents", fields: [coachId], references: [id], onDelete: SetNull)
+  students          AcademyAccount[]     @relation("CoachStudents")
+  programId         String?
+  program           AcademyProgram?      @relation(fields: [programId], references: [id], onDelete: SetNull)
+  packageName       String?
+  remainingSessions Int? // null = unlimited
+  lastLoginAt       DateTime?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
+
+  sessionsAsStudent    AcademySession[]    @relation("SessionStudent")
+  sessionsAsCoach      AcademySession[]    @relation("SessionCoach")
+  evaluationsAsStudent AcademyEvaluation[] @relation("EvaluationStudent")
+  evaluationsAsCoach   AcademyEvaluation[] @relation("EvaluationCoach")
+  progress             AcademyProgress[]
+  sentMessages         AcademyMessage[]    @relation("MessageSender")
+  receivedMessages     AcademyMessage[]    @relation("MessageRecipient")
+  feedback             AcademyFeedback[]
+
+  @@index([role])
+  @@index([coachId])
+}
+
+model AcademyVenue {
+  id        String           @id @default(cuid())
+  name      String           @unique
+  location  String
+  rating    Decimal?         @db.Decimal(2, 1)
+  imageUrl  String?
+  createdAt DateTime         @default(now())
+  sessions  AcademySession[]
+}
+
+/// A level in the curriculum, e.g. "Level 1 - Beginner Program".
+model AcademyProgram {
+  id          String   @id @default(cuid())
+  code        String   @unique // e.g. "level1"
+  level       String // e.g. "Level 1"
+  title       String
+  description String?
+  difficulty  String?
+  rating      Decimal? @db.Decimal(2, 1)
+  color       String   @default("emerald")
+  sortOrder   Int      @default(0)
+  isAvailable Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  modules   AcademyModule[]
+  sublevels AcademySublevel[]
+  students  AcademyAccount[]
+  sessions  AcademySession[]
+}
+
+/// Curriculum module shown on the admin Curriculum page.
+model AcademyModule {
+  id        String         @id @default(cuid())
+  programId String
+  program   AcademyProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+  name      String
+  duration  String
+  status    String         @default("Active") // Active | Draft
+  drills    String[]
+  sortOrder Int            @default(0)
+}
+
+/// Syllabus block (e.g. "Level 1a") ending in an evaluation.
+model AcademySublevel {
+  id             String                  @id @default(cuid())
+  programId      String
+  program        AcademyProgram          @relation(fields: [programId], references: [id], onDelete: Cascade)
+  name           String
+  evaluationName String
+  sortOrder      Int                     @default(0)
+  lessons        AcademySyllabusLesson[]
+}
+
+model AcademySyllabusLesson {
+  id         String            @id @default(cuid())
+  sublevelId String
+  sublevel   AcademySublevel   @relation(fields: [sublevelId], references: [id], onDelete: Cascade)
+  name       String
+  sortOrder  Int               @default(0)
+  progress   AcademyProgress[]
+}
+
+/// Per-student status of a syllabus lesson. Missing row = derived (LOCKED/PENDING).
+model AcademyProgress {
+  id        String                @id @default(cuid())
+  studentId String
+  student   AcademyAccount        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  lessonId  String
+  lesson    AcademySyllabusLesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  status    AcademyProgressStatus
+  updatedAt DateTime              @updatedAt
+
+  @@unique([studentId, lessonId])
+}
+
+/// A scheduled / booked training session between a coach and a student.
+model AcademySession {
+  id          String               @id @default(cuid())
+  studentId   String
+  student     AcademyAccount       @relation("SessionStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  coachId     String
+  coach       AcademyAccount       @relation("SessionCoach", fields: [coachId], references: [id], onDelete: Cascade)
+  venueId     String?
+  venue       AcademyVenue?        @relation(fields: [venueId], references: [id], onDelete: SetNull)
+  location    String? // free text when not a known venue (e.g. "Golfinity Hub - Indoor")
+  programId   String?
+  program     AcademyProgram?      @relation(fields: [programId], references: [id], onDelete: SetNull)
+  startsAt    DateTime
+  endsAt      DateTime
+  type        String // e.g. "On-Field Training", "Private"
+  topic       String?
+  status      AcademySessionStatus @default(UPCOMING)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
+  evaluations AcademyEvaluation[]
+
+  @@index([coachId, startsAt])
+  @@index([studentId, startsAt])
+}
+
+model AcademyEvaluation {
+  id          String                  @id @default(cuid())
+  studentId   String
+  student     AcademyAccount          @relation("EvaluationStudent", fields: [studentId], references: [id], onDelete: Cascade)
+  coachId     String
+  coach       AcademyAccount          @relation("EvaluationCoach", fields: [coachId], references: [id], onDelete: Cascade)
+  sessionId   String?
+  session     AcademySession?         @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  topic       String
+  levelLabel  String?
+  status      AcademyEvaluationStatus @default(PENDING)
+  score       Decimal?                @db.Decimal(5, 2) // 0-100
+  notes       String?
+  evaluatedAt DateTime?
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+
+  @@index([coachId, status])
+  @@index([studentId])
+}
+
+model AcademyLearningContent {
+  id          String             @id @default(cuid())
+  title       String
+  type        AcademyContentType
+  description String
+  duration    String
+  tag         String?
+  url         String?
+  sortOrder   Int                @default(0)
+  createdAt   DateTime           @default(now())
+}
+
+model AcademyMessage {
+  id          String         @id @default(cuid())
+  senderId    String
+  sender      AcademyAccount @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  recipientId String
+  recipient   AcademyAccount @relation("MessageRecipient", fields: [recipientId], references: [id], onDelete: Cascade)
+  text        String
+  readAt      DateTime?
+  createdAt   DateTime       @default(now())
+
+  @@index([senderId, recipientId, createdAt])
+  @@index([recipientId, readAt])
+}
+
+model AcademyFeedback {
+  id        String         @id @default(cuid())
+  accountId String
+  account   AcademyAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  rating    Int // 1-5
+  category  String
+  message   String
+  createdAt DateTime       @default(now())
+
+  @@index([createdAt])
 }

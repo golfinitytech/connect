@@ -1,10 +1,44 @@
 import axios from 'axios';
 
-const getBaseURL = () => {
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    /** Background/polling request: don't show the global progress bar. */
+    silent?: boolean;
+  }
+}
+
+// ── In-flight request tracking (drives <GlobalProgressBar />) ───────────────
+let inFlight = 0;
+const listeners = new Set<(n: number) => void>();
+const emit = () => listeners.forEach((l) => l(inFlight));
+export const subscribeInFlight = (fn: (n: number) => void) => {
+  listeners.add(fn);
+  fn(inFlight);
+  return () => {
+    listeners.delete(fn);
+  };
+};
+const track = (config: { silent?: boolean; __tracked?: boolean }) => {
+  if (config.silent || config.__tracked) return;
+  config.__tracked = true;
+  inFlight += 1;
+  emit();
+};
+const untrack = (config?: { __tracked?: boolean }) => {
+  if (!config?.__tracked) return;
+  config.__tracked = false;
+  inFlight = Math.max(0, inFlight - 1);
+  emit();
+};
+
+export const getBaseURL = () => {
   let url = 'http://localhost:3002/api';
   
   if (import.meta.env.VITE_API_BASE_URL) {
     url = import.meta.env.VITE_API_BASE_URL;
+  } else if (import.meta.env.VITE_API_HOST) {
+    // Hosting that only exposes the API's hostname (e.g. Render `fromService ... property: host`).
+    url = `https://${import.meta.env.VITE_API_HOST}/api`;
   } else {
     // Dynamically determine the backend URL based on the current hostname
     const hostname = window.location.hostname;
@@ -75,9 +109,21 @@ api.interceptors.request.use(
       }
     }
 
+    track(config as any);
     return config;
   },
   (error) => {
+    return Promise.reject(error);
+  }
+);
+
+api.interceptors.response.use(
+  (response) => {
+    untrack(response.config as any);
+    return response;
+  },
+  (error) => {
+    untrack(error?.config);
     return Promise.reject(error);
   }
 );

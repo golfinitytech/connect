@@ -1,4 +1,6 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
+import { clearPortalSession, getPortalUser } from '../../services/academyApi';
 import { Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { 
   LayoutDashboard, 
@@ -24,8 +26,10 @@ const PortalLayout = () => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const storedUser = localStorage.getItem('portalUser');
-  const user = storedUser ? JSON.parse(storedUser) : null;
+  const queryClient = useQueryClient();
+  // Re-read on navigation so login/logout are picked up.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const user = useMemo(() => getPortalUser(), [location.pathname]);
 
   const isCoach = location.pathname.includes('/portalakademik/coach');
   const isAdmin = location.pathname.includes('/portalakademik/admin');
@@ -56,35 +60,35 @@ const PortalLayout = () => {
   }, [location.pathname, user, navigate, isAdmin, isCoach, isStudent]);
 
   const studentMenuItems = [
-    { name: 'Dashboard', icon: <LayoutDashboard size={20} />, path: '/student/dashboard' },
-    { name: 'My Training Program', icon: <Target size={20} />, path: '/student/program' },
-    { name: 'Syllabus', icon: <BookOpen size={20} />, path: '/student/syllabus' },
-    { name: 'Session Tracker', icon: <History size={20} />, path: '/student/tracker' },
-    { name: 'Performance & Evaluation', icon: <BarChart2 size={20} />, path: '/student/evaluation' },
-    { name: 'Learning Center', icon: <GraduationCap size={20} />, path: '/student/learning' },
-    { name: 'Schedule', icon: <Calendar size={20} />, path: '/student/schedule' },
-    { name: 'Messages', icon: <MessageSquare size={20} />, path: '/student/messages' },
-    { name: 'Feedback', icon: <Star size={20} />, path: '/student/feedback' },
-    { name: 'Profile', icon: <User size={20} />, path: '/student/profile' },
+    { name: 'Dashboard', icon: <LayoutDashboard size={20} />, path: '/portalakademik/student/dashboard' },
+    { name: 'My Training Program', icon: <Target size={20} />, path: '/portalakademik/student/program' },
+    { name: 'Syllabus', icon: <BookOpen size={20} />, path: '/portalakademik/student/syllabus' },
+    { name: 'Session Tracker', icon: <History size={20} />, path: '/portalakademik/student/tracker' },
+    { name: 'Performance & Evaluation', icon: <BarChart2 size={20} />, path: '/portalakademik/student/evaluation' },
+    { name: 'Learning Center', icon: <GraduationCap size={20} />, path: '/portalakademik/student/learning' },
+    { name: 'Schedule', icon: <Calendar size={20} />, path: '/portalakademik/student/schedule' },
+    { name: 'Messages', icon: <MessageSquare size={20} />, path: '/portalakademik/student/messages' },
+    { name: 'Feedback', icon: <Star size={20} />, path: '/portalakademik/student/feedback' },
+    { name: 'Profile', icon: <User size={20} />, path: '/portalakademik/student/profile' },
   ];
 
   const coachMenuItems = [
-    { name: 'Dashboard', icon: <LayoutDashboard size={20} />, path: '/coach/dashboard' },
-    { name: 'Manage Students', icon: <Users size={20} />, path: '/coach/students' },
-    { name: 'Evaluations', icon: <ClipboardCheck size={20} />, path: '/coach/evaluations' },
-    { name: 'Schedule', icon: <Calendar size={20} />, path: '/coach/schedule' },
-    { name: 'Syllabus', icon: <BookOpen size={20} />, path: '/coach/syllabus' },
-    { name: 'Messages', icon: <MessageSquare size={20} />, path: '/coach/messages' },
-    { name: 'Profile', icon: <User size={20} />, path: '/coach/profile' },
+    { name: 'Dashboard', icon: <LayoutDashboard size={20} />, path: '/portalakademik/coach/dashboard' },
+    { name: 'Manage Students', icon: <Users size={20} />, path: '/portalakademik/coach/students' },
+    { name: 'Evaluations', icon: <ClipboardCheck size={20} />, path: '/portalakademik/coach/evaluations' },
+    { name: 'Schedule', icon: <Calendar size={20} />, path: '/portalakademik/coach/schedule' },
+    { name: 'Syllabus', icon: <BookOpen size={20} />, path: '/portalakademik/coach/syllabus' },
+    { name: 'Messages', icon: <MessageSquare size={20} />, path: '/portalakademik/coach/messages' },
+    { name: 'Profile', icon: <User size={20} />, path: '/portalakademik/coach/profile' },
   ];
 
   const adminMenuItems = [
-    { name: 'Dashboard', icon: <LayoutDashboard size={20} />, path: '/admin/dashboard' },
-    { name: 'Curriculum', icon: <BookOpen size={20} />, path: '/admin/curriculum' },
-    { name: 'Coaches', icon: <UserCog size={20} />, path: '/admin/coaches' },
-    { name: 'Students', icon: <Users size={20} />, path: '/admin/students' },
-    { name: 'Reports', icon: <BarChart3 size={20} />, path: '/admin/reports' },
-    { name: 'Hub Settings', icon: <ShieldCheck size={20} />, path: '/admin/settings' },
+    { name: 'Dashboard', icon: <LayoutDashboard size={20} />, path: '/portalakademik/admin/dashboard' },
+    { name: 'Curriculum', icon: <BookOpen size={20} />, path: '/portalakademik/admin/curriculum' },
+    { name: 'Coaches', icon: <UserCog size={20} />, path: '/portalakademik/admin/coaches' },
+    { name: 'Students', icon: <Users size={20} />, path: '/portalakademik/admin/students' },
+    { name: 'Reports', icon: <BarChart3 size={20} />, path: '/portalakademik/admin/reports' },
+    { name: 'Hub Settings', icon: <ShieldCheck size={20} />, path: '/portalakademik/admin/settings' },
   ];
 
   const menuItems = user?.role === 'admin' ? adminMenuItems : (user?.role === 'coach' ? coachMenuItems : studentMenuItems);
@@ -95,13 +99,18 @@ const PortalLayout = () => {
 
   const userInfo = {
     name: user?.name || (user?.role === 'admin' ? 'Admin Director' : (user?.role === 'coach' ? 'Coach' : 'Student')),
-    role: user?.role === 'admin' ? 'Hub Director' : (user?.role === 'coach' ? 'Senior Coach' : 'Student • Level 1'),
+    role: user?.role === 'admin'
+      ? 'Hub Director'
+      : user?.role === 'coach'
+        ? (user.specialty?.split('•')[0].trim() || 'Coach')
+        : `Student${user?.program ? ` • ${user.program.level}` : ''}`,
     initials: user?.name ? getInitials(user.name) : (user?.role === 'admin' ? 'AD' : (user?.role === 'coach' ? 'C' : 'S')),
-    image: user?.image
+    image: user?.avatarUrl ?? undefined
   };
 
   const handleLogout = () => {
-    localStorage.removeItem('portalUser');
+    clearPortalSession();
+    queryClient.clear();
     navigate('/portalakademik');
   };
 

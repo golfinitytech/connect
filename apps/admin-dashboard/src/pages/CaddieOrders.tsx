@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Download, Trophy, Medal, Star, TrendingUp, Medal as MedalIcon } from 'lucide-react';
 import api from '../services/api';
+import { PageLoader } from '../components/ui/Loading';
 
 const CaddieOrders = () => {
   const currentAdminLocationId = localStorage.getItem('adminLocationId') || 'karawang';
@@ -8,19 +9,22 @@ const CaddieOrders = () => {
   const [startDate, setStartDate] = useState(today);
   const [endDate, setEndDate] = useState(today);
   const [orders, setOrders] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const fetchOrders = async () => {
+    const fetchOrders = async (silent = true) => {
       try {
-        const res = await api.get(`/orders?locationId=${currentAdminLocationId}`);
+        const res = await api.get(`/orders?locationId=${currentAdminLocationId}`, { silent });
         setOrders(res.data);
       } catch (err) {
         console.error('Failed to fetch orders:', err);
+      } finally {
+        setIsLoading(false);
       }
     };
     
-    fetchOrders();
-    const interval = setInterval(fetchOrders, 10000); // Auto-refresh every 10s
+    fetchOrders(false);
+    const interval = setInterval(() => fetchOrders(true), 10000); // Auto-refresh every 10s
     return () => clearInterval(interval);
   }, [currentAdminLocationId]);
 
@@ -219,7 +223,7 @@ const CaddieOrders = () => {
               ))}
               {data.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="py-12 text-slate-400 text-center text-lg">Belum ada data ranking untuk lokasi/tanggal ini.</td>
+                  <td colSpan={8} className="py-12 text-slate-400 text-center text-lg">{isLoading ? <PageLoader label="Memuat data order..." className="!py-0" /> : 'Belum ada data ranking untuk lokasi/tanggal ini.'}</td>
                 </tr>
               )}
             </tbody>

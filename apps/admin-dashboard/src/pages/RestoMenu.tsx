@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Minus, Plus, RefreshCw, X, FileText } from 'lucide-react';
 import api from '../services/api';
+import { Spinner } from '../components/ui/Loading';
 import OrderTrackingModal from '../components/OrderTrackingModal';
 
 interface MenuItem {
@@ -250,7 +251,8 @@ const RestoMenu = () => {
               <button 
                 onClick={handlePesan}
                 disabled={isSubmitting || total === 0}
-                className="py-5 bg-blue-600 text-white font-black text-xl rounded-2xl hover:bg-blue-500 transition-all shadow-xl shadow-blue-600/30 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed">
+                className="py-5 bg-blue-600 text-white font-black text-xl rounded-2xl hover:bg-blue-500 transition-all shadow-xl shadow-blue-600/30 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                {isSubmitting && <Spinner size={18} />}
                 {isSubmitting ? 'MEMPROSES...' : 'PESAN'}
               </button>
             </div>

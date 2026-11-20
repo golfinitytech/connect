@@ -44,6 +44,9 @@ function randomPin() {
   return String(1000 + Math.floor(Math.random() * 9000));
 }
 
+/** A repeat publish (same course + name) within this window returns the existing tournament. */
+const DUPLICATE_PUBLISH_WINDOW_MS = 60_000;
+
 @Injectable()
 export class TournamentsService {
   private readonly logger = new Logger(TournamentsService.name);
@@ -143,7 +146,29 @@ export class TournamentsService {
     const marshalPin = /^\d{4}$/.test(requestedPin) ? requestedPin : randomPin();
     const currentYear = new Date().getFullYear();
 
+    const name: string = info.name || 'Tournament';
+    let duplicateOf: { id: string; marshalPin: string | null } | null = null;
+
     const created = await this.prisma.$transaction(async (tx) => {
+      // Serialize publishes per course so a double submit can't race past the check below.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${'tournament-publish:' + course}))`;
+
+      // Same tournament published again within a minute (double click, retry): reuse it.
+      const recent = await tx.tournament.findFirst({
+        where: {
+          course,
+          name,
+          publishedAt: { not: null },
+          createdAt: { gte: new Date(Date.now() - DUPLICATE_PUBLISH_WINDOW_MS) },
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, marshalPin: true },
+      });
+      if (recent) {
+        duplicateOf = recent;
+        return null;
+      }
+
       // Archive (not delete) whatever is currently active on this course.
       await tx.tournament.updateMany({
         where: { publishedAt: { not: null }, course },
@@ -158,7 +183,7 @@ export class TournamentsService {
 
       const t = await tx.tournament.create({
         data: {
-          name: info.name || 'Tournament',
+          name,
           date: new Date(info.date || new Date()),
           course,
           teeBox: info.tee || info.teeBox || 'White',
@@ -190,31 +215,44 @@ export class TournamentsService {
         };
       };
 
+      // Batched writes: one query for all groups, one for all players (remote DB latency).
+      const createdGroups = groups.length
+        ? await tx.tournamentGroup.createManyAndReturn({
+            data: groups.map((g, i) => ({
+              tournamentId: t.id,
+              number: i + 1,
+              code: String(i + 1),
+              startHole: Number.isInteger(g.startHole) ? g.startHole : null,
+              flightType: g.flightType || '',
+              caddieData: g.caddie ?? undefined,
+            })),
+            select: { id: true, number: true },
+          })
+        : [];
+      const groupIdByNumber = new Map(createdGroups.map((g) => [g.number, g.id]));
+
       const groupedIds = new Set<string>();
-      for (let i = 0; i < groups.length; i++) {
-        const g = groups[i];
-        const number = i + 1;
-        const group = await tx.tournamentGroup.create({
-          data: {
-            tournamentId: t.id,
-            number,
-            code: String(number),
-            startHole: Number.isInteger(g.startHole) ? g.startHole : null,
-            flightType: g.flightType || '',
-            caddieData: g.caddie ?? undefined,
-          },
-        });
+      const rows: Prisma.TournamentPlayerCreateManyInput[] = [];
+      groups.forEach((g, i) => {
         for (const p of g.players || []) {
           if (p?.id !== undefined) groupedIds.add(String(p.id));
-          await tx.tournamentPlayer.create({ data: { ...playerData(p), groupId: group.id } });
+          rows.push({ ...playerData(p), groupId: groupIdByNumber.get(i + 1) ?? null });
         }
-      }
+      });
       for (const p of looseRaw) {
         if (p?.id !== undefined && groupedIds.has(String(p.id))) continue;
-        await tx.tournamentPlayer.create({ data: playerData(p) });
+        rows.push({ ...playerData(p), groupId: null });
       }
+      if (rows.length) await tx.tournamentPlayer.createMany({ data: rows });
       return t;
     });
+
+    if (!created) {
+      const dup = duplicateOf as unknown as { id: string; marshalPin: string | null };
+      this.logger.warn(`Duplicate publish of "${name}" on ${course} ignored; returning ${dup.id}`);
+      const full = await this.loadFull(dup.id);
+      return { ...full, marshalPin: dup.marshalPin };
+    }
 
     this.logger.log(`Tournament ${created.id} created with code ${created.code}`);
     const full = await this.loadFull(created.id);
@@ -255,6 +293,8 @@ export class TournamentsService {
 
       const seenPlayers = new Set<string>();
       const seenGroups = new Set<string>();
+      const newPlayers: Prisma.TournamentPlayerCreateManyInput[] = [];
+      const newCodes = new Set<string>();
 
       const upsertPlayer = async (p: any, groupId: string | null) => {
         const existing =
@@ -271,19 +311,24 @@ export class TournamentsService {
         };
         if (existing) {
           seenPlayers.add(existing.id);
-          await tx.tournamentPlayer.update({
-            where: { id: existing.id },
-            data: { ...fields, ...(groupId !== undefined ? { groupId } : {}) },
-          });
+          const nextGroup = groupId !== undefined ? groupId : existing.groupId;
+          const changed =
+            nextGroup !== existing.groupId ||
+            (Object.keys(fields) as (keyof typeof fields)[]).some((k) => existing[k] !== fields[k]);
+          // Skip no-op writes: each query is a network round-trip to the remote DB.
+          if (changed) {
+            await tx.tournamentPlayer.update({
+              where: { id: existing.id },
+              data: { ...fields, groupId: nextGroup },
+            });
+          }
         } else {
           let code: string;
           do {
             code = `GF-${currentYear}-${t.code ?? 'T'}-${(counter++).toString().padStart(3, '0')}`;
-          } while (playerByCode.has(code));
-          const createdP = await tx.tournamentPlayer.create({
-            data: { tournamentId: t.id, code, groupId, ...fields },
-          });
-          seenPlayers.add(createdP.id);
+          } while (playerByCode.has(code) || newCodes.has(code));
+          newCodes.add(code);
+          newPlayers.push({ tournamentId: t.id, code, groupId, ...fields });
         }
       };
 
@@ -291,14 +336,16 @@ export class TournamentsService {
         const code = normalizeFlightCode(g.code);
         let group = groupByCode.get(code);
         if (group) {
-          group = await tx.tournamentGroup.update({
-            where: { id: group.id },
-            data: {
-              flightType: g.flightType ?? group.flightType,
-              ...(g.caddie ? { caddieData: g.caddie } : {}),
-              ...(Number.isInteger(g.startHole) ? { startHole: g.startHole } : {}),
-            },
-          });
+          const data = {
+            flightType: g.flightType ?? group.flightType,
+            ...(g.caddie ? { caddieData: g.caddie } : {}),
+            ...(Number.isInteger(g.startHole) ? { startHole: g.startHole } : {}),
+          };
+          const changed =
+            data.flightType !== group.flightType ||
+            ('caddieData' in data && JSON.stringify(data.caddieData) !== JSON.stringify(group.caddieData)) ||
+            ('startHole' in data && data.startHole !== group.startHole);
+          if (changed) group = await tx.tournamentGroup.update({ where: { id: group.id }, data });
         } else {
           maxNumber += 1;
           group = await tx.tournamentGroup.create({
@@ -322,6 +369,7 @@ export class TournamentsService {
         // Loose player: keep their current group if they already exist.
         await upsertPlayer(p, known ? known.groupId : null);
       }
+      if (newPlayers.length) await tx.tournamentPlayer.createMany({ data: newPlayers });
 
       // Remove players that disappeared from the payload, but never if they have scores.
       const scored = new Set(

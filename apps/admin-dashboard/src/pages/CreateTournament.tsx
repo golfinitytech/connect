@@ -16,7 +16,8 @@ import {
   CheckCircle2,
   Download,
   Upload,
-  MapPin
+  MapPin,
+  Loader2
 } from 'lucide-react';
 
 const CreateTournament = () => {
@@ -24,6 +25,10 @@ const CreateTournament = () => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState(1);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
+  // Guards "Confirm & Publish" against double clicks: the ref blocks clicks that land
+  // before React re-renders the disabled button.
+  const [isPublishing, setIsPublishing] = useState(false);
+  const publishingRef = useRef(false);
   const currentAdminLocation = localStorage.getItem('adminLocation') || 'Palm Springs Karawang';
   const [caddiesMaster, setCaddiesMaster] = useState<any[]>([]);
   const [caddieAssignments, setCaddieAssignments] = useState<Record<number, { number: string, name: string }>>({});
@@ -797,7 +802,8 @@ const CreateTournament = () => {
               </div>
               <button 
                 onClick={() => setShowSummaryModal(false)}
-                className="p-2 text-slate-400 hover:text-slate-600 transition-colors"
+                disabled={isPublishing}
+                className="p-2 text-slate-400 hover:text-slate-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 <Plus size={24} className="rotate-45" />
               </button>
@@ -895,12 +901,18 @@ const CreateTournament = () => {
             <div className="p-8 border-t border-slate-100 bg-slate-50/50 flex justify-end gap-4">
               <button 
                 onClick={() => setShowSummaryModal(false)}
-                className="px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest text-slate-500 hover:text-slate-800 transition-colors"
+                disabled={isPublishing}
+                className="px-8 py-4 rounded-2xl font-black text-xs uppercase tracking-widest text-slate-500 hover:text-slate-800 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 Back to Edit
               </button>
               <button 
+                disabled={isPublishing}
+                aria-busy={isPublishing}
                 onClick={async () => {
+                  if (publishingRef.current) return;
+                  publishingRef.current = true;
+                  setIsPublishing(true);
                   try {
                     const currentYear = new Date().getFullYear();
                     const generatedGroups = groupingMode === 'auto' ? autoGroupPlayers(players) : manualGroups.map(g => g.players);
@@ -981,11 +993,15 @@ const CreateTournament = () => {
                   } catch (error) {
                     console.error('Error publishing tournament:', error);
                     alert('Failed to publish tournament to database. Please check your connection.');
+                  } finally {
+                    publishingRef.current = false;
+                    setIsPublishing(false);
                   }
                 }}
-                className="bg-emerald-600 hover:bg-emerald-700 px-10 py-4 rounded-2xl font-black text-xs uppercase tracking-widest text-white shadow-xl shadow-emerald-600/20 transition-all active:scale-95"
+                className="bg-emerald-600 hover:bg-emerald-700 px-10 py-4 rounded-2xl font-black text-xs uppercase tracking-widest text-white shadow-xl shadow-emerald-600/20 transition-all active:scale-95 disabled:bg-emerald-600/60 disabled:cursor-wait disabled:active:scale-100 flex items-center gap-3"
               >
-                Confirm & Publish
+                {isPublishing && <Loader2 size={16} className="animate-spin" />}
+                {isPublishing ? 'Publishing...' : 'Confirm & Publish'}
               </button>
             </div>
           </div>

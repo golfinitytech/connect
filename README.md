@@ -7,7 +7,7 @@ Monorepo for the Golfinity Connect mobile app and backend.
 - `apps/mobile`: React Native (Expo + TypeScript)
 - `apps/api`: NestJS + Prisma
 - Database: PostgreSQL on Supabase (local Postgres via Docker optional)
-- Cache/realtime support: Redis
+- File storage: Supabase Storage (face photos)
 
 ## Requirements
 
@@ -56,26 +56,35 @@ docker compose up -d   # then use the local URLs commented in .env.example
 npm install
 ```
 
-4. Create the tables and generate the Prisma client:
+4. Create the tables and generate the Prisma client (new schema changes: `npx prisma migrate dev --create-only` against a local DB, review the SQL, then `migrate deploy`):
 
 ```bash
-npm run prisma:push
+npm -w apps/api exec prisma migrate deploy
 npm run prisma:generate
 ```
 
-5. Seed sample data:
+5. Seed data:
 
 ```bash
+# Portal Akademik (coaches, students, curriculum, demo sessions). Safe to re-run.
+# Prints a generated password per new account unless ACADEMY_SEED_PASSWORD is set.
+npm -w apps/api run seed:academy
+
+# Mobile sample data (courses, menu, demo users). WARNING: wipes existing app data first.
 npm -w apps/api run prisma:seed
 ```
 
-6. Run backend:
+6. Supabase Storage: face photos go to the private `face-photos` bucket. Create it once per
+   project by running `ops/supabase/face-photos-bucket.sql` in the Supabase SQL editor, and set
+   `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` in `apps/api/.env`.
+
+7. Run backend:
 
 ```bash
 npm run dev:api
 ```
 
-7. Run mobile app:
+8. Run mobile app:
 
 ```bash
 npm run dev:mobile

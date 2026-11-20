@@ -14,43 +14,51 @@ import {
   Trophy,
   Star
 } from 'lucide-react';
-import { studentAccounts } from '../../data/authData';
+import { useNavigate } from 'react-router-dom';
+import { fmtRelative, getPortalUser, initials, useSessions, useStudents } from '../../services/academyApi';
+import { QueryState } from './shared';
 
 const CoachStudents = () => {
   const [searchTerm, setSearchTerm] = useState('');
   
-  const storedUser = localStorage.getItem('portalUser');
-  const user = storedUser ? JSON.parse(storedUser) : null;
-  const coachName = user?.name || 'Coach';
+  const navigate = useNavigate();
+  const coachName = getPortalUser()?.name || 'Coach';
+  const { data, isLoading, error } = useStudents();
+  const weekStart = new Date();
+  weekStart.setHours(0, 0, 0, 0);
+  weekStart.setDate(weekStart.getDate() - ((weekStart.getDay() + 6) % 7));
+  const { data: weekSessions } = useSessions({
+    from: weekStart.toISOString(),
+    to: new Date(weekStart.getTime() + 7 * 86_400_000).toISOString(),
+  });
 
-  // Logic to determine which students belong to this coach
-  const coachStudents = studentAccounts.filter(account => {
-    if (coachName === 'Anang Mulyanto') {
-      return ['Regi', 'Hadi', 'Fakih', 'Ridho'].includes(account.name);
-    } else if (coachName === 'Apep Benhur') {
-      return account.name === 'John Doe';
-    } else if (coachName === 'Ana Suhana') {
-      return !['Regi', 'Hadi', 'Fakih', 'Ridho', 'John Doe'].includes(account.name);
-    }
-    return true; // Default show all if coach not mapped
-  }).map((account, index) => ({
-    id: index + 1,
-    name: account.name,
-    level: index % 3 === 0 ? 'Level 1 - Fundamental' : (index % 3 === 1 ? 'Level 2 - Intermediate' : 'Level 3 - Advanced'),
-    progress: Math.floor(Math.random() * 40) + 40, // 40-80%
-    lastSession: '2 hari yang lalu',
-    nextSession: 'Besok, 10:00 AM',
-    status: 'Active',
-    avatar: account.name.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2),
-    attendance: '92%',
-    handicap: Math.floor(Math.random() * 10) + 18,
-    email: `${account.name.toLowerCase().replace(' ', '.')}@example.com`
+  const coachStudents = (data ?? []).map((s) => ({
+    id: s.id,
+    name: s.name,
+    email: s.email,
+    phone: s.phone,
+    level: s.program ? `${s.program.level} - ${s.program.title}` : 'Belum ada program',
+    progress: s.syllabusProgress,
+    lastSession: fmtRelative(s.lastPracticeAt),
+    nextSession: s.nextSessionAt
+      ? new Date(s.nextSessionAt).toLocaleString('id-ID', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+      : 'Belum dijadwalkan',
+    status: s.status === 'ACTIVE' ? 'Active' : 'Inactive',
+    avatar: initials(s.name),
+    attendance: s.attendance == null ? '-' : `${s.attendance}%`,
+    sessions: s.completedSessions,
+    remaining: s.remainingSessions == null ? '∞' : s.remainingSessions,
   }));
 
   const filteredStudents = coachStudents.filter(s => 
     s.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
     s.level.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const avg = (xs: number[]) => (xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : null);
+  const avgProgress = avg((data ?? []).map((s) => s.syllabusProgress));
+  const avgAttendance = avg((data ?? []).filter((s) => s.attendance != null).map((s) => s.attendance as number));
+  const weekCount = (weekSessions ?? []).filter((x) => x.status !== 'CANCELLED').length;
 
   return (
     <div className="space-y-8 animate-in fade-in duration-500">
@@ -75,9 +83,9 @@ const CoachStudents = () => {
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         {[
           { label: 'Total Murid', value: coachStudents.length, icon: <Users size={16} />, color: 'text-blue-600', bg: 'bg-blue-50' },
-          { label: 'Rata-rata Progres', value: '68%', icon: <Target size={16} />, color: 'text-emerald-600', bg: 'bg-emerald-50' },
-          { label: 'Kehadiran', value: '94%', icon: <CheckCircle2 size={16} />, color: 'text-purple-600', bg: 'bg-purple-50' },
-          { label: 'Sesi Minggu Ini', value: '12', icon: <Calendar size={16} />, color: 'text-amber-600', bg: 'bg-amber-50' },
+          { label: 'Rata-rata Progres', value: avgProgress == null ? '-' : `${avgProgress}%`, icon: <Target size={16} />, color: 'text-emerald-600', bg: 'bg-emerald-50' },
+          { label: 'Kehadiran', value: avgAttendance == null ? '-' : `${avgAttendance}%`, icon: <CheckCircle2 size={16} />, color: 'text-purple-600', bg: 'bg-purple-50' },
+          { label: 'Sesi Minggu Ini', value: weekCount, icon: <Calendar size={16} />, color: 'text-amber-600', bg: 'bg-amber-50' },
         ].map((stat, i) => (
           <div key={i} className={`${stat.bg} p-5 rounded-[24px] border border-white/50 shadow-sm relative overflow-hidden group`}>
             <div className="absolute -right-2 -top-2 text-white/10 group-hover:scale-110 transition-transform duration-500">
@@ -101,11 +109,9 @@ const CoachStudents = () => {
             onChange={(e) => setSearchTerm(e.target.value)}
           />
         </div>
-        <button className="px-6 py-3 bg-gray-50 border border-gray-100 rounded-2xl text-sm font-bold text-gray-600 hover:bg-gray-100 transition-all flex items-center gap-2">
-          <Filter size={18} /> Filter
-        </button>
       </div>
 
+      <QueryState isLoading={isLoading} error={error} />
       {/* Student Cards Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {filteredStudents.map((student) => (
@@ -126,15 +132,12 @@ const CoachStudents = () => {
                   </div>
                 </div>
               </div>
-              <button className="p-2 hover:bg-gray-50 rounded-xl transition-colors">
-                <MoreVertical size={20} className="text-gray-400" />
-              </button>
             </div>
 
             <div className="grid grid-cols-3 gap-4 mb-6">
               <div className="text-center p-3 bg-gray-50 rounded-2xl">
-                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Handicap</p>
-                <p className="text-sm font-bold text-gray-900">{student.handicap}</p>
+                <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Sisa Sesi</p>
+                <p className="text-sm font-bold text-gray-900">{student.remaining}</p>
               </div>
               <div className="text-center p-3 bg-gray-50 rounded-2xl">
                 <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Kehadiran</p>
@@ -176,14 +179,16 @@ const CoachStudents = () => {
 
             <div className="mt-6 pt-6 border-t border-gray-50 flex items-center justify-between">
               <div className="flex items-center gap-2">
-                <button className="p-2 bg-gray-50 hover:bg-blue-50 text-blue-600 rounded-xl transition-colors border border-gray-100">
+                <a href={`mailto:${student.email}`} title={student.email} className="p-2 bg-gray-50 hover:bg-blue-50 text-blue-600 rounded-xl transition-colors border border-gray-100">
                   <Mail size={16} />
-                </button>
-                <button className="p-2 bg-gray-50 hover:bg-emerald-50 text-emerald-600 rounded-xl transition-colors border border-gray-100">
-                  <Phone size={16} />
-                </button>
+                </a>
+                {student.phone && (
+                  <a href={`tel:${student.phone}`} title={student.phone} className="p-2 bg-gray-50 hover:bg-emerald-50 text-emerald-600 rounded-xl transition-colors border border-gray-100">
+                    <Phone size={16} />
+                  </a>
+                )}
               </div>
-              <button className="flex items-center gap-2 text-sm font-bold text-emerald-600 hover:gap-3 transition-all">
+              <button onClick={() => navigate(`/portalakademik/coach/syllabus?student=${student.id}`)} className="flex items-center gap-2 text-sm font-bold text-emerald-600 hover:gap-3 transition-all">
                 Lihat Detail Progres <ChevronRight size={18} />
               </button>
             </div>
@@ -191,7 +196,7 @@ const CoachStudents = () => {
         ))}
       </div>
 
-      {filteredStudents.length === 0 && (
+      {!isLoading && !error && filteredStudents.length === 0 && (
         <div className="py-20 text-center">
           <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4 text-gray-300">
             <Users size={40} />

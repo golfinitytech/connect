@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X, ChevronLeft, ChevronRight, Save } from 'lucide-react';
+import { Spinner, useAsyncAction } from './ui/Loading';
 
 interface PlayerScore {
   id: number;
@@ -27,6 +28,36 @@ const ScoreSubmissionModal = ({ isOpen, onClose, players: initialPlayers }: Scor
 
   const [showSuccessPopup, setShowSuccessPopup] = useState(false);
   const [showExitConfirmPopup, setShowExitConfirmPopup] = useState(false);
+  const { run: completeRound, pending: completing } = useAsyncAction(async () => {
+    try {
+      // Send completed status to backend
+      const locationId = localStorage.getItem('adminLocationId') || 'karawang';
+      const caddieCode = localStorage.getItem('caddieCode') || '001';
+
+      // @ts-ignore
+      const { default: api } = await import('../services/api');
+      await api.post('/tournaments/rounds', {
+        locationId,
+        caddieCode,
+        players: players.map(p => ({
+          name: p.name || 'Unknown',
+          scores: p.scores
+        })),
+        isCompleted: true
+      });
+    } catch (e) {
+      console.error('Failed to complete round activity', e);
+    }
+
+    // Clear the scores to make scorecard empty
+    localStorage.removeItem('golf_players_scores');
+    localStorage.removeItem('golf_players_details');
+    localStorage.removeItem('golf_players_data'); // Clear player data too so it resets completely
+    setShowExitConfirmPopup(false);
+    onClose();
+    // Reload to reflect empty state and return to dashboard
+    window.location.reload();
+  });
 
   useEffect(() => {
     setPlayers(initialPlayers);
@@ -327,45 +358,18 @@ const ScoreSubmissionModal = ({ isOpen, onClose, players: initialPlayers }: Scor
                     setShowExitConfirmPopup(false);
                     onClose();
                   }}
-                  className="flex-1 py-4 border-2 border-blue-500 text-blue-500 font-bold rounded-xl text-xl hover:bg-blue-50 transition-colors"
+                  disabled={completing}
+                  className="flex-1 py-4 border-2 border-blue-500 text-blue-500 font-bold rounded-xl text-xl hover:bg-blue-50 transition-colors disabled:opacity-40"
                 >
                   Batal
                 </button>
                 <button 
-                  onClick={async () => {
-                    setShowExitConfirmPopup(false);
-
-                    try {
-                      // Send completed status to backend
-                      const locationId = localStorage.getItem('adminLocationId') || 'karawang';
-                      const caddieCode = localStorage.getItem('caddieCode') || '001';
-                      
-                      // @ts-ignore
-                      const { default: api } = await import('../services/api');
-                      await api.post('/tournaments/rounds', {
-                        locationId,
-                        caddieCode,
-                        players: players.map(p => ({ 
-                          name: p.name || 'Unknown',
-                          scores: p.scores
-                        })),
-                        isCompleted: true
-                      });
-                    } catch (e) {
-                      console.error('Failed to complete round activity', e);
-                    }
-
-                    // Clear the scores to make scorecard empty
-                    localStorage.removeItem('golf_players_scores');
-                    localStorage.removeItem('golf_players_details');
-                    localStorage.removeItem('golf_players_data'); // Clear player data too so it resets completely
-                    onClose();
-                    // Reload to reflect empty state and return to dashboard
-                    window.location.reload();
-                  }}
-                  className="flex-1 py-4 bg-blue-500 text-white font-bold rounded-xl text-xl hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/20"
+                  onClick={completeRound}
+                  disabled={completing}
+                  className="flex-1 py-4 bg-blue-500 text-white font-bold rounded-xl text-xl hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/20 disabled:opacity-70 disabled:cursor-wait flex items-center justify-center gap-2"
                 >
-                  OK
+                  {completing && <Spinner size={20} />}
+                  {completing ? 'Menyimpan...' : 'OK'}
                 </button>
               </div>
             </div>

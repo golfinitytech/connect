@@ -14,6 +14,7 @@ import {
 import ScoreInputModal from '../components/ScoreInputModal';
 import LeaderboardModal from '../components/LeaderboardModal';
 import api from '../services/api';
+import { LoadingOverlay, PageLoader, Spinner, useAsyncAction } from '../components/ui/Loading';
 
 type Nine = 'IN' | 'OUT';
 const nineOf = (hole: number): Nine => (hole <= 9 ? 'IN' : 'OUT');
@@ -64,6 +65,15 @@ const TournamentScorecard = () => {
   const [players, setPlayers] = useState<any[]>([]);
   const [serverPars, setServerPars] = useState<number[] | null>(null);
   const pendingSavesRef = useRef(0);
+  // Cells (`${playerId}:${hole}`) whose score is being saved: shown with a spinner and locked.
+  const [savingCells, setSavingCells] = useState<Set<string>>(new Set());
+  const markSaving = (key: string, on: boolean) =>
+    setSavingCells((prev) => {
+      const next = new Set(prev);
+      if (on) next.add(key);
+      else next.delete(key);
+      return next;
+    });
   const marshalPinRef = useRef<string | null>(null);
 
   // Modal State
@@ -183,10 +193,10 @@ const TournamentScorecard = () => {
     });
   }
 
-  const refreshFlight = async (sess: any = session) => {
+  const refreshFlight = async (sess: any = session, silent = false) => {
     if (!sess?.tournamentId || !sess?.flight) return;
     try {
-      const res = await api.get(`/tournaments/${sess.tournamentId}/flights/${sess.flight}`);
+      const res = await api.get(`/tournaments/${sess.tournamentId}/flights/${sess.flight}`, { silent });
       if (pendingSavesRef.current > 0) return; // don't overwrite optimistic state mid-save
       const data = res.data;
       setTournamentInfo(data.tournament);
@@ -258,7 +268,7 @@ const TournamentScorecard = () => {
     if (!session || !session.flight) return;
     
     const fetchLatestScores = () => {
-      refreshFlight(session).catch(() => { /* silent while polling */ });
+      refreshFlight(session, true).catch(() => { /* silent while polling */ });
     };
 
     const scoreInterval = window.setInterval(fetchLatestScores, 3000);
@@ -268,7 +278,7 @@ const TournamentScorecard = () => {
   const fetchChatMessages = async () => {
     try {
       if (!session?.tournamentId) return;
-      const res = await api.get(`/tournaments/${session.tournamentId}/messages`);
+      const res = await api.get(`/tournaments/${session.tournamentId}/messages`, { silent: true });
       
       let newMessagesArray = [];
       if (res.data?.success) {
@@ -438,7 +448,7 @@ const TournamentScorecard = () => {
           changedHole,
           changedPlayerName,
           isApproved: true
-        });
+        }, { silent: true });
       } else {
         await api.post('/admin-notifications', {
           roleInfo,
@@ -448,7 +458,7 @@ const TournamentScorecard = () => {
           isApproved,
           isMarshalEdit,
           groupCode: session?.flight || 'Unknown'
-        });
+        }, { silent: true });
       }
     } catch (err) {
       console.error('Failed to send notification:', err);
@@ -457,6 +467,7 @@ const TournamentScorecard = () => {
 
   const handleScoreClick = (player: any, holeNum: number, currentScore: number | null) => {
     if (isTotalInputMode || player.name === '-') return;
+    if (savingCells.has(`${player.id}:${holeNum}`)) return; // previous save for this cell still running
 
     const activePlayers = players.filter(p => p.name !== '-');
     const hasAnyProgress = activePlayers.some(p => {
@@ -557,6 +568,8 @@ const TournamentScorecard = () => {
     const i = idxOf(hole);
     const version = player.versions?.[n]?.[i];
     const actorName = caddieActorName();
+    const cellKey = `${player.id}:${hole}`;
+    markSaving(cellKey, true);
 
     // Optimistic update
     setPlayers((prev) =>
@@ -602,11 +615,12 @@ const TournamentScorecard = () => {
       showNotice(apiMessage(err), 'error');
     } finally {
       pendingSavesRef.current -= 1;
-      await refreshFlight().catch(() => {});
+      await refreshFlight(undefined, true).catch(() => {});
+      markSaving(cellKey, false);
     }
   };
 
-  const handleMarshalAuth = async () => {
+  const handleMarshalAuthImpl = async () => {
     if (!session?.tournamentId) return;
     try {
       await api.post(`/tournaments/${session.tournamentId}/marshal/verify`, { marshalPin: marshalPassword });
@@ -631,13 +645,15 @@ const TournamentScorecard = () => {
     }
   };
 
-  const handleConfirmApproval = async () => {
+  const handleConfirmApprovalImpl = async () => {
     if (!approvalData || !session) return;
     const ids = approvalData.players.map((ap) => ap.playerId).filter((id) => !String(id).startsWith('empty-'));
     const hole = approvalData.holeNumber;
-    setIsApprovalModalOpen(false);
-    setApprovalData(null);
-    if (ids.length === 0) return;
+    if (ids.length === 0) {
+      setIsApprovalModalOpen(false);
+      setApprovalData(null);
+      return;
+    }
 
     pendingSavesRef.current += 1;
     try {
@@ -648,14 +664,20 @@ const TournamentScorecard = () => {
         groupCode: String(session.flight),
       });
       approvalData.players.forEach((ap) => notifyAdmin(hole, ap.playerName, ap.score, true, false));
+      await refreshFlight(undefined, true).catch(() => {});
+      setIsApprovalModalOpen(false);
+      setApprovalData(null);
       showNotice(`Skor hole ${hole} sudah dikonfirmasi player.`, 'info');
     } catch (err: any) {
+      // Keep the modal open so the caddie can retry.
       showNotice(apiMessage(err, 'Gagal konfirmasi skor.'), 'error');
     } finally {
       pendingSavesRef.current -= 1;
-      await refreshFlight().catch(() => {});
     }
   };
+
+  const { run: handleMarshalAuth, pending: marshalVerifying } = useAsyncAction(handleMarshalAuthImpl);
+  const { run: handleConfirmApproval, pending: approving } = useAsyncAction(handleConfirmApprovalImpl);
 
   const handleManualConfirmPlayer = () => {
     const activePlayers = players.filter(p => p.name !== '-');
@@ -695,7 +717,13 @@ const TournamentScorecard = () => {
     }
   };
 
-  if (!session || !tournamentInfo) return null;
+  if (!session || !tournamentInfo) {
+    return (
+      <div className="h-screen bg-[#004741] flex items-center justify-center">
+        <PageLoader label="Memuat scorecard..." className="!text-white/80" />
+      </div>
+    );
+  }
 
   const currentHoles = holeData[activeNine] || holeData['IN'];
 
@@ -714,6 +742,13 @@ const TournamentScorecard = () => {
           </div>
         </div>
       )}
+      {savingCells.size > 0 && (
+        <div className="fixed top-4 right-4 z-[100] flex items-center gap-2 rounded-full bg-slate-900/90 px-4 py-2 text-[11px] font-black uppercase tracking-widest text-white shadow-xl" role="status" aria-live="polite">
+          <Spinner size={14} className="text-emerald-400" />
+          Menyimpan skor...
+        </div>
+      )}
+      <LoadingOverlay show={approving} label="Mengonfirmasi skor..." />
       {/* Top Header */}
       <header className="bg-[#004741] text-white flex items-center justify-between px-6 py-3 shrink-0 shadow-lg relative z-10">
         <div className="flex items-center gap-8 h-full">
@@ -905,12 +940,19 @@ const TournamentScorecard = () => {
                   {activeScores.map((score, sIdx) => {
                     const isApproved = activeApprovals[sIdx];
                     const isMarshalEdited = activeMarshalEdits[sIdx];
+                    const isSaving = savingCells.has(`${player.id}:${currentHoles[sIdx].num}`);
                     return (
                       <div 
                         key={sIdx} 
                         onClick={() => handleScoreClick(player, currentHoles[sIdx].num, score)}
-                        className={`flex-1 flex flex-col items-center justify-center py-2 border-r border-slate-100 last:border-r-0 transition-all relative ${isTotalInputMode ? 'opacity-10 scale-90' : 'opacity-100'} ${!isEmpty ? 'cursor-pointer hover:bg-blue-50/50 rounded mx-1' : ''} ${isMarshalEdited ? 'bg-orange-50' : isApproved ? 'bg-emerald-50' : ''}`}
+                        aria-busy={isSaving}
+                        className={`flex-1 flex flex-col items-center justify-center py-2 border-r border-slate-100 last:border-r-0 transition-all relative ${isTotalInputMode ? 'opacity-10 scale-90' : 'opacity-100'} ${!isEmpty ? (isSaving ? 'cursor-wait rounded mx-1 bg-blue-50/60' : 'cursor-pointer hover:bg-blue-50/50 rounded mx-1') : ''} ${isMarshalEdited ? 'bg-orange-50' : isApproved ? 'bg-emerald-50' : ''}`}
                       >
+                        {isSaving && (
+                          <div className="absolute bottom-0.5 right-0.5">
+                            <Spinner size={11} className="text-blue-500" />
+                          </div>
+                        )}
                         <span className={`text-xl font-black italic tracking-tighter transition-all ${isEmpty ? 'text-slate-100' : score === 0 ? 'text-slate-200' : isMarshalEdited ? 'text-orange-600' : isApproved ? 'text-emerald-600' : 'text-slate-800'}`}>
                           {isEmpty ? '-' : score === 0 ? '-' : score === 'OUT' ? 'NR' : score}
                         </span>
@@ -1144,8 +1186,12 @@ const TournamentScorecard = () => {
                               }`}>
                                 {m.text}
                               </div>
-                              <span className={`text-[10px] font-bold text-slate-400 mt-1 ${isOut ? 'text-right mr-1' : 'ml-1'}`}>
-                                {new Date(m.ts).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                              <span className={`text-[10px] font-bold text-slate-400 mt-1 flex items-center gap-1 ${isOut ? 'justify-end mr-1' : 'ml-1'}`}>
+                                {String(m.id).startsWith('temp-') ? (
+                                  <><Spinner size={10} /> mengirim...</>
+                                ) : (
+                                  new Date(m.ts).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })
+                                )}
                               </span>
                             </div>
                           </div>
@@ -1261,15 +1307,18 @@ const TournamentScorecard = () => {
                     setIsMarshalModalOpen(false);
                     setMarshalPassword('');
                   }}
-                  className="flex-1 py-4 bg-slate-100 hover:bg-slate-200 text-slate-500 font-black uppercase text-[10px] tracking-widest rounded-2xl transition-all"
+                  disabled={marshalVerifying}
+                  className="flex-1 py-4 bg-slate-100 hover:bg-slate-200 text-slate-500 font-black uppercase text-[10px] tracking-widest rounded-2xl transition-all disabled:opacity-40"
                 >
                   Batal
                 </button>
                 <button 
                   onClick={handleMarshalAuth}
-                  className="flex-[2] py-4 bg-orange-600 hover:bg-orange-500 text-white font-black uppercase text-[10px] tracking-widest rounded-2xl transition-all shadow-lg shadow-orange-600/20"
+                  disabled={marshalVerifying}
+                  className="flex-[2] py-4 bg-orange-600 hover:bg-orange-500 disabled:opacity-70 disabled:cursor-wait text-white font-black uppercase text-[10px] tracking-widest rounded-2xl transition-all shadow-lg shadow-orange-600/20 flex items-center justify-center gap-2"
                 >
-                  Konfirmasi Marshal
+                  {marshalVerifying && <Spinner size={14} />}
+                  {marshalVerifying ? 'Memeriksa PIN...' : 'Konfirmasi Marshal'}
                 </button>
               </div>
             </div>
@@ -1326,15 +1375,18 @@ const TournamentScorecard = () => {
                     setIsApprovalModalOpen(false);
                     setApprovalData(null);
                   }}
-                  className="flex-1 py-4 bg-slate-100 hover:bg-slate-200 text-slate-500 font-black uppercase text-xs tracking-widest rounded-2xl transition-all"
+                  disabled={approving}
+                  className="flex-1 py-4 bg-slate-100 hover:bg-slate-200 text-slate-500 font-black uppercase text-xs tracking-widest rounded-2xl transition-all disabled:opacity-40"
                 >
                   Batal
                 </button>
                 <button 
                   onClick={handleConfirmApproval}
-                  className="flex-[2] py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-black uppercase text-xs tracking-widest rounded-2xl transition-all shadow-xl shadow-emerald-600/20 active:scale-95"
+                  disabled={approving}
+                  className="flex-[2] py-4 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-70 disabled:cursor-wait text-white font-black uppercase text-xs tracking-widest rounded-2xl transition-all shadow-xl shadow-emerald-600/20 active:scale-95 flex items-center justify-center gap-2"
                 >
-                  Setujui Semua
+                  {approving && <Spinner size={16} />}
+                  {approving ? 'Menyimpan...' : 'Setujui Semua'}
                 </button>
               </div>
             </div>

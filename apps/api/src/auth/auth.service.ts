@@ -7,13 +7,12 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
 import { OAuth2Client } from 'google-auth-library';
 import { UsersService } from '../users/users.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../mail/email.service';
 import { FirebaseService } from '../firebase/firebase.service';
+import { FaceStorageService } from '../storage/face-storage.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { ForgotPasswordDto } from './dto/forgot-password.dto';
@@ -29,6 +28,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly emailService: EmailService,
     private readonly firebaseService: FirebaseService,
+    private readonly faceStorage: FaceStorageService,
   ) {}
 
   async register(registerDto: RegisterDto) {
@@ -251,35 +251,22 @@ export class AuthService {
   }
 
   async enrollFace(userId: string, imageBase64: string) {
-    const raw = imageBase64.trim();
-    const match = raw.match(/^data:(image\/(jpeg|jpg|png));base64,(.+)$/i);
-    const base64 = match ? match[3] : raw;
-    const mime = match ? match[1].toLowerCase() : 'image/jpeg';
-    const ext = mime.includes('png') ? 'png' : 'jpg';
-
-    const buffer = Buffer.from(base64, 'base64');
-    if (!buffer.length) {
-      throw new BadRequestException('Invalid image');
-    }
-    if (buffer.length > 2_500_000) {
-      throw new BadRequestException('Image too large');
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { facePhotoPath: true },
+    });
+    if (!user) {
+      throw new UnauthorizedException();
     }
 
-    const uploadRoot =
-      process.env.FACE_UPLOAD_DIR ??
-      path.join(process.cwd(), 'apps', 'api', 'uploads', 'faces');
-    await fs.mkdir(uploadRoot, { recursive: true });
-
-    const fileName = `${userId}-${Date.now()}.${ext}`;
-    const fullPath = path.join(uploadRoot, fileName);
-    await fs.writeFile(fullPath, buffer);
-
+    const key = await this.faceStorage.saveFace(
+      userId,
+      imageBase64,
+      user.facePhotoPath,
+    );
     await this.prisma.user.update({
       where: { id: userId },
-      data: {
-        facePhotoPath: fullPath,
-        facePhotoUpdatedAt: new Date(),
-      },
+      data: { facePhotoPath: key, facePhotoUpdatedAt: new Date() },
     });
 
     return { ok: true };

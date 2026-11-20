@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { X, Trophy, Globe, Activity, Users, Calendar, Flag, TrendingUp, Crown, Clock, Lock, Maximize, Minimize } from 'lucide-react';
 import ScoreInputModal from './ScoreInputModal';
 import api from '../services/api';
+import { BoardSkeleton, LiveSyncBadge, Spinner, useAsyncAction } from './ui/Loading';
 
 interface LeaderboardModalProps {
   isOpen: boolean;
@@ -16,6 +17,8 @@ interface LeaderboardModalProps {
 
 const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGroupCode, currentFlight, defaultViewMode, variant }: LeaderboardModalProps) => {
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [lastSyncAt, setLastSyncAt] = useState<Date | null>(null);
+  const [syncFailing, setSyncFailing] = useState(false);
   const [filterMode, setFilterMode] = useState<string>('Overall');
   const [playerSearch, setPlayerSearch] = useState<string>('');
   const [chatDraft, setChatDraft] = useState<string>('');
@@ -121,7 +124,7 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
     try {
       // @ts-ignore
       const { default: api } = await import('../services/api');
-      const res = await api.get('/tournaments/chat');
+      const res = await api.get('/tournaments/chat', { silent: true });
       if (Array.isArray(res.data)) {
         const sorted = res.data.sort((a: any, b: any) => a.ts - b.ts);
         setChatMessages(prev => {
@@ -235,8 +238,10 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
 
   const fetchServerBoard = async () => {
     try {
-      const res = await api.get('/tournaments/active/leaderboard');
+      const res = await api.get('/tournaments/active/leaderboard', { silent: true });
       const data = res.data;
+      setLastSyncAt(new Date());
+      setSyncFailing(false);
       if (!data?.entries) {
         setServerBoard(null);
         return;
@@ -250,6 +255,7 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
       setServerBoard({ tournamentId: data.tournament.id, pars: data.tournament.pars, byPlayer, order });
     } catch (err) {
       console.warn('Failed to fetch server leaderboard:', err);
+      setSyncFailing(true);
     }
   };
 
@@ -262,7 +268,7 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
     return fallback;
   };
 
-  const applyMarshalScoreUpdate = async (payload: {
+  const applyMarshalScoreUpdateImpl = async (payload: {
     groupCode: string;
     playerId: string | number;
     playerName: string;
@@ -313,7 +319,7 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
     }
   };
 
-  const handleMarshalAuth = async () => {
+  const handleMarshalAuthImpl = async () => {
     const tournamentId = serverBoard?.tournamentId;
     if (!tournamentId) {
       alert('Data turnamen belum termuat.');
@@ -342,14 +348,35 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
     }
   };
 
+  const { run: applyMarshalScoreUpdate, pending: savingMarshalEdit } = useAsyncAction(applyMarshalScoreUpdateImpl);
+  const { run: handleMarshalAuth, pending: marshalVerifying } = useAsyncAction(handleMarshalAuthImpl);
+  // Live boards never cover the screen: `boardLoaded` only gates the empty-state skeleton,
+  // and is reset when the board is opened, not on every data refresh.
+  const [boardLoaded, setBoardLoaded] = useState(false);
+  useEffect(() => {
+    if (isOpen) setBoardLoaded(false);
+  }, [isOpen]);
+
+  // Parents often pass a fresh `players` array on every render (e.g. scorecard polling every 3s).
+  // Read it through a ref so the polling effect doesn't restart (and refetch) on each render.
+  const playersRef = useRef(players);
+  playersRef.current = players;
+  useEffect(() => {
+    if (!isOpen || !players) return;
+    if (variant === 'caddie' || !localStorage.getItem('active_tournament')) setAllPlayersData(players);
+  }, [isOpen, players, variant]);
+
   useEffect(() => {
     if (!isOpen) return;
 
     const fetchLatestData = async () => {
-      fetchServerBoard();
-      if (variant === 'caddie') return;
+      const board = fetchServerBoard();
+      if (variant === 'caddie') {
+        await board;
+        return;
+      }
       try {
-        const response = await api.get('/tournaments/active');
+        const response = await api.get('/tournaments/active', { silent: true });
         if (response.data && response.data.groups) {
           const tournament = response.data;
           localStorage.setItem('active_tournament', JSON.stringify(tournament));
@@ -368,6 +395,7 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
     };
 
     const loadData = () => {
+      const players = playersRef.current;
       if (variant === 'caddie') {
         if (players) setAllPlayersData(players);
         return;
@@ -408,13 +436,25 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
       setAllPlayersData(collectedPlayers);
     };
 
-    loadData();
-    fetchLatestData().then(loadData);
-    const interval = setInterval(() => {
-      fetchLatestData().then(loadData);
-    }, 5000);
+    // Skip a tick while the previous refresh is still in flight (slow network) instead of piling up.
+    let refreshing = false;
+    const refresh = async () => {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        await fetchLatestData();
+        loadData();
+      } finally {
+        refreshing = false;
+      }
+    };
+
+    loadData(); // show cached data immediately
+    refresh().finally(() => setBoardLoaded(true));
+    const interval = setInterval(refresh, 5000);
     return () => clearInterval(interval);
-  }, [isOpen, players]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, variant]);
 
   if (!isOpen) return null;
 
@@ -578,6 +618,12 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
         
         {/* Subtle radial gradient for depth */}
         <div className="absolute inset-0 bg-gradient-to-br from-blue-900/20 via-transparent to-black/40 pointer-events-none" />
+
+        {savingMarshalEdit && (
+          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-[60] flex items-center gap-2 rounded-full bg-slate-900/90 border border-white/10 px-4 py-2 text-[11px] font-black uppercase tracking-widest text-white shadow-xl pointer-events-none" role="status" aria-live="polite">
+            <Spinner size={14} className="text-orange-400" /> Menyimpan edit marshal...
+          </div>
+        )}
 
         <div className="flex flex-1 w-full h-full overflow-hidden relative z-10">
           {/* Sidebar Left - Orange Panel */}
@@ -836,6 +882,7 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
                   <span className="text-[12px] font-black uppercase tracking-widest text-white">GolfinityConnect</span>
                 </div>
                 <div className="flex items-center gap-4">
+                  <LiveSyncBadge lastSyncAt={lastSyncAt} failing={syncFailing} now={currentTime} />
                   {viewMode === 'detailed' && (
                     <div className="flex items-center gap-3">
                       <span className="text-[12px] font-black text-white/90 tracking-wide">Search Player</span>
@@ -873,6 +920,8 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
                     <span className="w-24 md:w-32 lg:w-40 text-[10px] font-black text-white/70 uppercase tracking-widest text-center">Total Score (Gross)</span>
                     <span className="w-16 md:w-20 lg:w-24 text-[10px] font-black text-white/70 uppercase tracking-widest text-center">Hole</span>
                   </div>
+
+                  {!boardLoaded && sortedPlayers.length === 0 && <BoardSkeleton />}
 
                   {/* Top 4 Players - Sticky/Fixed at the top */}
                   {sortedPlayers.slice(0, 4).map((player: any, idx: number) => {
@@ -1248,7 +1297,7 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
                       </React.Fragment>
                     );
                   })
-                ) : (
+                ) : !boardLoaded ? null : (
                   <div className="flex flex-col items-center justify-center h-full opacity-10">
                     <Activity size={200} className="text-white mb-10 animate-pulse" />
                     <span className="text-5xl font-black text-white uppercase tracking-[0.6em] italic">Tournament Sync</span>
@@ -1273,6 +1322,7 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
                   
                   {/* Detailed Table Body */}
                   <div className="flex-1 overflow-y-auto custom-scrollbar-dark pb-10 min-w-[700px]">
+                    {!boardLoaded && sortedPlayers.length === 0 && <BoardSkeleton />}
                     {sortedPlayers.map((player: any, idx: number) => (
                       <div 
                         key={player.id || idx}
@@ -1405,7 +1455,7 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
 
       {isMarshalModalOpen && marshalTarget && (
         <div className="fixed inset-0 z-[400] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-slate-900/90 backdrop-blur-xl" onClick={() => setIsMarshalModalOpen(false)} />
+          <div className="absolute inset-0 bg-slate-900/90 backdrop-blur-xl" onClick={() => !marshalVerifying && setIsMarshalModalOpen(false)} />
           
           <div className="relative bg-white w-full max-w-sm rounded-[40px] shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-300 border border-white/20">
             <div className="bg-orange-600 px-8 py-6 flex justify-between items-center">
@@ -1476,15 +1526,18 @@ const LeaderboardModal = ({ isOpen, onClose, tournamentName, players, currentGro
                     setIsMarshalModalOpen(false);
                     setMarshalPassword('');
                   }}
-                  className="flex-1 py-4 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] transition-all rounded-2xl text-[11px] font-black text-slate-500 uppercase tracking-widest"
+                  disabled={marshalVerifying}
+                  className="flex-1 py-4 bg-slate-100 hover:bg-slate-200 active:scale-[0.98] transition-all rounded-2xl text-[11px] font-black text-slate-500 uppercase tracking-widest disabled:opacity-40"
                 >
                   Batal
                 </button>
                 <button
                   onClick={handleMarshalAuth}
-                  className="flex-1 py-4 bg-orange-600 hover:bg-orange-500 active:scale-[0.98] transition-all rounded-2xl text-[11px] font-black text-white uppercase tracking-widest shadow-lg shadow-orange-600/30"
+                  disabled={marshalVerifying}
+                  className="flex-1 py-4 bg-orange-600 hover:bg-orange-500 disabled:opacity-70 disabled:cursor-wait active:scale-[0.98] transition-all rounded-2xl text-[11px] font-black text-white uppercase tracking-widest shadow-lg shadow-orange-600/30 flex items-center justify-center gap-2"
                 >
-                  Konfirmasi Marshal
+                  {marshalVerifying && <Spinner size={14} />}
+                  {marshalVerifying ? 'Memeriksa...' : 'Konfirmasi Marshal'}
                 </button>
               </div>
             </div>

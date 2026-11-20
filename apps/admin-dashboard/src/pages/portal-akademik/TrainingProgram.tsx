@@ -1,40 +1,59 @@
-import React, { useState } from 'react';
-import { Target, CheckCircle2, Star, Users, Briefcase, Award, BookOpen, ChevronRight, Lock, Trophy, Circle, Package, MapPin, Eye, CreditCard, Check, User, Calendar, Clock, ChevronLeft } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Target, CheckCircle2, Star, Briefcase, Award, ChevronRight, Lock, Trophy, Circle, Package, MapPin, Check, User, Calendar, Clock, ChevronLeft } from 'lucide-react';
+import { apiErrorMessage, localDateKey, useBookSession, useCoaches, useSyllabus, useVenues } from '../../services/academyApi';
+import type { Coach, Venue } from '../../services/academyApi';
+import { Avatar, QueryState } from './shared';
 
-import coachAnaImg from '../../assets/ana-suhana.jpeg';
-import coachAnangImg from '../../assets/anang-mulyanto.jpeg';
-import coachApepImg from '../../assets/apep-benhur.jpeg';
-import coachAtepImg from '../../assets/atep-suwarman.jpeg';
-import coachItangImg from '../../assets/itang-saepudin.jpeg';
-import coachJefrizalImg from '../../assets/jefrizal-sani.jpeg';
-import coachSakimImg from '../../assets/sakim-mahara-budi.jpeg';
-import coachUjiImg from '../../assets/uji-setiaji.jpeg';
+const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const DAY_ID = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+const VENUE_FALLBACK = 'https://images.unsplash.com/photo-1587174486073-ae5e5cff23aa?auto=format&fit=crop&q=80&w=800';
+
+type ProgramCard = {
+  id: string;
+  code: string;
+  title: string;
+  tagline: string;
+  color: string;
+  available: boolean;
+  sublevels: { id: string; name: string; evaluation: string; evalStatus: string; sessions: { id: string; name: string; status: string }[] }[];
+};
 
 const TrainingProgram = () => {
   const [isBooking, setIsBooking] = useState(false);
   const [bookingStep, setBookingStep] = useState('paket'); // paket, coach, venue, review, payment
-  const [selectedProgram, setSelectedProgram] = useState<any>(null);
-  const [selectedCoach, setSelectedCoach] = useState<any>(null);
-  const [selectedVenue, setSelectedVenue] = useState<any>(null);
+  const [selectedProgram, setSelectedProgram] = useState<ProgramCard | null>(null);
+  const [selectedCoach, setSelectedCoach] = useState<Coach | null>(null);
+  const [selectedVenue, setSelectedVenue] = useState<Venue | null>(null);
   const [selectedDate, setSelectedDate] = useState<string>('');
   const [selectedTime, setSelectedTime] = useState<string>('');
+  const [bookingError, setBookingError] = useState('');
 
-  const coaches = [
-    { id: 1, name: 'Ana Suhana', specialty: 'Senior Coach • Fundamentals', rating: 4.9, image: coachAnaImg },
-    { id: 2, name: 'Anang Mulyanto', specialty: 'Head Coach • Advanced Swing', rating: 5.0, image: coachAnangImg },
-    { id: 3, name: 'Apep Benhur', specialty: 'Pro Coach • Junior Specialist', rating: 4.8, image: coachApepImg },
-    { id: 4, name: 'Atep Suwarman', specialty: 'Short Game Expert', rating: 4.7, image: coachAtepImg },
-    { id: 5, name: 'Itang Saepudin', specialty: 'Mental & Strategy', rating: 4.9, image: coachItangImg },
-    { id: 6, name: 'Jefrizal Sani', specialty: 'Technical Analyst', rating: 4.6, image: coachJefrizalImg },
-    { id: 7, name: 'Sakim Mahara Budi', specialty: 'Physical Conditioning', rating: 4.9, image: coachSakimImg },
-    { id: 8, name: 'Uji Setiaji', specialty: 'Tour Professional Coach', rating: 5.0, image: coachUjiImg },
-  ];
+  const syllabusQ = useSyllabus();
+  const coachesQ = useCoaches();
+  const venuesQ = useVenues();
+  const book = useBookSession();
 
-  const venues = [
-    { id: 1, name: 'Padang Golf Sulaiman', location: 'Bandung, Jawa Barat', rating: 4.8, image: 'https://images.unsplash.com/photo-1587174486073-ae5e5cff23aa?auto=format&fit=crop&q=80&w=800' },
-    { id: 2, name: 'Palm Springs Kerawang', location: 'Karawang, Jawa Barat', rating: 4.7, image: 'https://images.unsplash.com/photo-1535131749006-b7f58c99034b?auto=format&fit=crop&q=80&w=800' },
-    { id: 3, name: 'Jatinangor National Golf', location: 'Sumedang, Jawa Barat', rating: 4.9, image: 'https://images.unsplash.com/photo-1593111774240-d529f12cf4bb?auto=format&fit=crop&q=80&w=800' },
-  ];
+  const coaches = (coachesQ.data ?? []).filter((c) => c.status === 'ACTIVE');
+  const venues = venuesQ.data ?? [];
+
+  const programs: ProgramCard[] = (syllabusQ.data ?? []).map((p) => ({
+    id: p.id,
+    code: p.code,
+    title: `${p.level} - ${p.title}`,
+    tagline: p.isAvailable ? (p.description ?? '') : 'Materi akan segera tersedia.',
+    color: p.color,
+    available: p.isAvailable && p.sublevels.length > 0,
+    sublevels: p.sublevels.map((s) => ({ id: s.id, name: s.name, evaluation: s.evaluation, evalStatus: s.evalStatus, sessions: s.lessons })),
+  }));
+
+  // Next 7 days, starting tomorrow.
+  const availableDates = useMemo(() => {
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date();
+      d.setDate(d.getDate() + i + 1);
+      return { date: localDateKey(d), day: DAY_SHORT[d.getDay()], label: i === 0 ? 'Besok' : DAY_ID[d.getDay()] };
+    });
+  }, []);
 
   const steps = [
     { id: 'paket', label: 'Paket', icon: <Package size={20} /> },
@@ -59,6 +78,7 @@ const TrainingProgram = () => {
       setBookingStep('coach');
       setSelectedVenue(null);
     } else if (bookingStep === 'review') {
+      setBookingError('');
       setBookingStep('venue');
     }
   };
@@ -68,68 +88,26 @@ const TrainingProgram = () => {
       setBookingStep('venue');
     } else if (bookingStep === 'venue' && selectedVenue) {
       setBookingStep('review');
-    } else if (bookingStep === 'review' && selectedDate && selectedTime) {
-      setBookingStep('payment');
+    } else if (bookingStep === 'review' && selectedDate && selectedTime && selectedCoach) {
+      setBookingError('');
+      book.mutate(
+        {
+          coachId: selectedCoach.id,
+          venueId: selectedVenue?.id,
+          programId: selectedProgram?.id,
+          startsAt: new Date(`${selectedDate}T${selectedTime}:00`).toISOString(),
+          type: 'Private',
+        },
+        {
+          onSuccess: () => setBookingStep('payment'),
+          onError: (e) => setBookingError(apiErrorMessage(e, 'Booking gagal. Coba lagi.')),
+        },
+      );
     }
   };
 
   const timeSlots = [
     '08:00', '09:00', '10:00', '11:00', '13:00', '14:00', '15:00', '16:00', '19:00', '20:00'
-  ];
-
-  const availableDates = [
-    { date: '2026-04-29', day: 'Wed', label: 'Besok' },
-    { date: '2026-04-30', day: 'Thu', label: 'Kamis' },
-    { date: '2026-05-01', day: 'Fri', label: 'Jumat' },
-    { date: '2026-05-02', day: 'Sat', label: 'Sabtu' },
-    { date: '2026-05-03', day: 'Sun', label: 'Minggu' },
-    { date: '2026-05-04', day: 'Mon', label: 'Senin' },
-    { date: '2026-05-05', day: 'Tue', label: 'Selasa' },
-  ];
-
-  const programs = [
-    {
-      id: 'level1',
-      title: 'Level 1 - Beginner Program',
-      tagline: 'Pondasi dasar teknik golf untuk pemula.',
-      color: 'emerald',
-      sublevels: [
-        {
-          name: 'Level 1a',
-          sessions: [
-            { name: 'Session 1 – Grip', status: 'completed' },
-            { name: 'Session 2 – Posture', status: 'completed' },
-            { name: 'Session 3 – Alignment', status: 'in-progress' },
-            { name: 'Session 4 – Review & Drill', status: 'pending' },
-          ],
-          evaluation: 'Mid Level Evaluation',
-          evalStatus: 'pending'
-        },
-        {
-          name: 'Level 2a',
-          sessions: [
-            { name: 'Session 5 – Grip', status: 'locked' },
-            { name: 'Session 6 – Posture', status: 'locked' },
-            { name: 'Session 7 – Alignment', status: 'locked' },
-            { name: 'Session 8 – Review & Drill', status: 'locked' },
-          ],
-          evaluation: 'Level 1 Evaluation',
-          evalStatus: 'locked'
-        }
-      ]
-    },
-    {
-      id: 'level2',
-      title: 'Level 2',
-      tagline: 'Materi akan segera tersedia.',
-      color: 'blue'
-    },
-    {
-      id: 'level3',
-      title: 'Level 3',
-      tagline: 'Materi akan segera tersedia.',
-      color: 'amber'
-    }
   ];
 
   return (
@@ -141,22 +119,23 @@ const TrainingProgram = () => {
             <p className="text-gray-500 mt-1">Lacak progres latihan Anda dan pilih paket yang sesuai dengan tujuan Anda.</p>
           </div>
 
+          <QueryState isLoading={syllabusQ.isLoading} error={syllabusQ.error} />
           <div className="space-y-12">
             {programs.map((program) => (
               <div key={program.id} className="space-y-6">
                 <div className="flex items-center gap-3">
                   <div className={`w-12 h-12 rounded-2xl bg-${program.color}-50 flex items-center justify-center text-${program.color}-600 shadow-sm border border-${program.color}-100`}>
-                    {program.id === 'level1' ? <Target size={24} /> : 
-                     program.id === 'level2' ? <Award size={24} /> : <Star size={24} />}
+                    {program.code === 'level1' ? <Target size={24} /> : 
+                     program.code === 'level2' ? <Award size={24} /> : <Star size={24} />}
                   </div>
                   <h2 className="text-2xl font-bold text-gray-900">{program.title}</h2>
                 </div>
 
-                {program.sublevels ? (
+                {program.available ? (
                   <>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                      {program.sublevels.map((sub, sIdx) => (
-                        <div key={sIdx} className="bg-white rounded-[40px] p-8 shadow-sm border border-gray-100 flex flex-col h-full hover:shadow-md transition-all">
+                      {program.sublevels.map((sub) => (
+                        <div key={sub.id} className="bg-white rounded-[40px] p-8 shadow-sm border border-gray-100 flex flex-col h-full hover:shadow-md transition-all">
                           <div className="flex justify-between items-center mb-6">
                             <h3 className="text-xl font-bold text-gray-900">{sub.name}</h3>
                             <span className={`text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider ${
@@ -167,9 +146,9 @@ const TrainingProgram = () => {
                           </div>
 
                           <div className="flex-1 space-y-3">
-                            {sub.sessions.map((session, sesIdx) => (
+                            {sub.sessions.map((session) => (
                               <div 
-                                key={sesIdx} 
+                                key={session.id} 
                                 className={`flex items-center justify-between p-4 rounded-2xl border transition-all ${
                                   session.status === 'completed' ? 'bg-emerald-50 border-emerald-100 text-emerald-900' :
                                   session.status === 'in-progress' ? 'bg-white border-emerald-500 text-emerald-900 shadow-sm' :
@@ -196,9 +175,9 @@ const TrainingProgram = () => {
                               <span className="text-sm font-bold">{sub.evaluation}</span>
                             </div>
                             {sub.evalStatus !== 'locked' && (
-                              <button className="bg-amber-500 text-white px-4 py-1.5 rounded-lg text-xs font-bold hover:bg-amber-600 transition-all shadow-sm">
-                                Start
-                              </button>
+                              <span className="text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider bg-white text-amber-700 border border-amber-200">
+                                {sub.evalStatus === 'ready' ? 'Siap dievaluasi' : 'Berjalan'}
+                              </span>
                             )}
                           </div>
                         </div>
@@ -223,12 +202,10 @@ const TrainingProgram = () => {
                       </div>
                     </div>
                     <button 
-                      onClick={() => handleSelectProgram(program)}
-                      className={`mt-6 w-full py-4 rounded-2xl font-bold text-white transition-all shadow-lg shadow-${program.color}-100 hover:shadow-xl ${
-                        program.id === 'level2' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-amber-500 hover:bg-amber-600'
-                      }`}
+                      disabled
+                      className="mt-6 w-full py-4 rounded-2xl font-bold text-gray-400 bg-gray-100 cursor-not-allowed"
                     >
-                      Pilih Paket Ini
+                      Segera Hadir
                     </button>
                   </div>
                 )}
@@ -282,6 +259,7 @@ const TrainingProgram = () => {
                   <p className="text-gray-500 mt-1">Pilih coach favorit Anda untuk mendampingi sesi latihan ini.</p>
                 </div>
                 
+                <QueryState isLoading={coachesQ.isLoading} error={coachesQ.error} isEmpty={!coachesQ.isLoading && !coachesQ.error && coaches.length === 0} emptyText="Belum ada coach aktif." />
                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                   {coaches.map((coach) => (
                     <div 
@@ -297,14 +275,14 @@ const TrainingProgram = () => {
                         </div>
                       )}
                       <div className="w-full aspect-square rounded-2xl bg-gray-100 mb-4 overflow-hidden">
-                        <img src={coach.image} alt={coach.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
+                        <Avatar name={coach.name} src={coach.avatarUrl} className="w-full h-full text-4xl group-hover:scale-110 transition-transform duration-500" />
                       </div>
                       <h3 className="font-bold text-gray-900 group-hover:text-emerald-600 transition-colors">{coach.name}</h3>
                       <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">{coach.specialty}</p>
                       <div className="mt-4 pt-4 border-t border-gray-50 flex justify-between items-center">
                         <div className="flex items-center gap-1">
                           <Star size={14} className="text-amber-400 fill-amber-400" />
-                          <span className="text-sm font-bold">{coach.rating}</span>
+                          <span className="text-sm font-bold">{coach.rating ?? '-'}</span>
                         </div>
                         <span className={`text-xs font-bold transition-colors ${selectedCoach?.id === coach.id ? 'text-emerald-600' : 'text-gray-400 group-hover:text-emerald-600'}`}>
                           {selectedCoach?.id === coach.id ? 'Terpilih' : 'Pilih Coach'}
@@ -342,6 +320,7 @@ const TrainingProgram = () => {
                   <p className="text-gray-500 mt-1">Pilih lokasi venue yang paling nyaman untuk Anda.</p>
                 </div>
 
+                <QueryState isLoading={venuesQ.isLoading} error={venuesQ.error} />
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   {venues.map((venue) => (
                     <div 
@@ -357,7 +336,7 @@ const TrainingProgram = () => {
                         </div>
                       )}
                       <div className="w-full aspect-video rounded-2xl bg-gray-100 mb-4 overflow-hidden">
-                        <img src={venue.image} alt={venue.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
+                        <img src={venue.imageUrl ?? VENUE_FALLBACK} alt={venue.name} className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
                       </div>
                       <h3 className="font-bold text-gray-900 group-hover:text-emerald-600 transition-colors">{venue.name}</h3>
                       <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1 flex items-center gap-1">
@@ -367,7 +346,7 @@ const TrainingProgram = () => {
                       <div className="mt-4 pt-4 border-t border-gray-50 flex justify-between items-center">
                         <div className="flex items-center gap-1">
                           <Star size={14} className="text-amber-400 fill-amber-400" />
-                          <span className="text-sm font-bold">{venue.rating}</span>
+                          <span className="text-sm font-bold">{venue.rating ?? '-'}</span>
                         </div>
                         <span className={`text-xs font-bold transition-colors ${selectedVenue?.id === venue.id ? 'text-emerald-600' : 'text-gray-400 group-hover:text-emerald-600'}`}>
                           {selectedVenue?.id === venue.id ? 'Terpilih' : 'Pilih Venue'}
@@ -423,9 +402,7 @@ const TrainingProgram = () => {
                           </div>
                         </div>
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-white overflow-hidden shadow-sm">
-                            <img src={selectedCoach?.image} alt="" className="w-full h-full object-cover" />
-                          </div>
+                          <Avatar name={selectedCoach?.name} src={selectedCoach?.avatarUrl} className="w-10 h-10 rounded-xl text-sm shadow-sm" />
                           <div>
                             <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest">Coach</p>
                             <p className="text-sm font-bold text-gray-900">{selectedCoach?.name}</p>
@@ -494,6 +471,9 @@ const TrainingProgram = () => {
                   </div>
                 </div>
 
+                {bookingError && (
+                  <div className="p-4 rounded-2xl bg-red-50 border border-red-100 text-red-700 text-sm font-medium">{bookingError}</div>
+                )}
                 {/* Navigation Buttons */}
                 <div className="flex gap-4 pt-8">
                   <button 
@@ -504,12 +484,12 @@ const TrainingProgram = () => {
                   </button>
                   <button 
                         onClick={handleNext}
-                        disabled={!selectedDate || !selectedTime}
+                        disabled={!selectedDate || !selectedTime || book.isPending}
                         className={`flex-[2] py-4 rounded-2xl font-bold text-white transition-all shadow-lg flex items-center justify-center gap-2 ${
-                          selectedDate && selectedTime ? 'bg-[#86b19a] hover:bg-[#76a18a]' : 'bg-gray-300 cursor-not-allowed shadow-none'
+                          selectedDate && selectedTime && !book.isPending ? 'bg-[#86b19a] hover:bg-[#76a18a]' : 'bg-gray-300 cursor-not-allowed shadow-none'
                         }`}
                       >
-                        Lanjut ke Selesai Booking <ChevronRight size={20} />
+                        {book.isPending ? 'Memproses booking...' : <>Konfirmasi Booking <ChevronRight size={20} /></>}
                       </button>
                 </div>
               </div>
@@ -524,7 +504,7 @@ const TrainingProgram = () => {
                 <div className="text-center space-y-4 mb-12">
                   <h2 className="text-3xl font-extrabold text-gray-900">Booking Berhasil!</h2>
                   <p className="text-gray-500 max-w-md mx-auto">
-                    Sesi latihan Anda telah dijadwalkan. Kami telah mengirimkan detail konfirmasi ke email Anda.
+                    Sesi latihan Anda telah dijadwalkan dan bisa dilihat di menu Schedule.
                   </p>
                 </div>
 
@@ -542,9 +522,7 @@ const TrainingProgram = () => {
                       <div>
                         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Coach Pendamping</p>
                         <div className="flex items-center gap-3 mt-2">
-                          <div className="w-10 h-10 rounded-xl overflow-hidden shadow-sm">
-                            <img src={selectedCoach?.image} alt="" className="w-full h-full object-cover" />
-                          </div>
+                          <Avatar name={selectedCoach?.name} src={selectedCoach?.avatarUrl} className="w-10 h-10 rounded-xl text-sm shadow-sm" />
                           <p className="font-bold text-gray-900">{selectedCoach?.name}</p>
                         </div>
                       </div>
@@ -562,7 +540,7 @@ const TrainingProgram = () => {
                         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Waktu Latihan</p>
                         <div className="flex items-center gap-2 mt-1 text-emerald-600">
                           <Calendar size={16} />
-                          <p className="font-bold">{selectedDate} • {selectedTime}</p>
+                          <p className="font-bold">{selectedDate && new Date(`${selectedDate}T00:00:00`).toLocaleDateString('id-ID', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} • {selectedTime}</p>
                         </div>
                       </div>
                     </div>

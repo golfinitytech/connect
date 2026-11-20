@@ -1,4 +1,8 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { getPortalUser, useLearningContent } from '../../services/academyApi';
+import type { LearningContent } from '../../services/academyApi';
+import { QueryState } from './shared';
 import { 
   GraduationCap, 
   PlayCircle, 
@@ -11,101 +15,27 @@ import {
   ArrowRight
 } from 'lucide-react';
 
+const TYPE_META: Record<LearningContent['type'], { label: string; icon: React.ReactNode }> = {
+  BOOKLET: { label: 'Booklets', icon: <Book className="text-emerald-600" /> },
+  VIDEO: { label: 'Videos', icon: <PlayCircle className="text-blue-600" /> },
+  ARTICLE: { label: 'Articles', icon: <FileText className="text-purple-600" /> },
+  COACH_TIP: { label: 'Coach Tips', icon: <Star className="text-amber-600" /> },
+};
+
 const LearningCenter = () => {
+  const navigate = useNavigate();
+  const [search, setSearch] = useState('');
+  const { data, isLoading, error } = useLearningContent();
   const [activeCategory, setActiveCategory] = useState('All');
 
-  const categories = ['All', 'Booklets', 'Videos', 'Articles', 'Coach Tips'];
-
-  const content = [
-    // Booklets
-    { 
-      title: 'Panduan Dasar Golfinity', 
-      type: 'Booklets', 
-      description: 'Materi dasar teknik golf, terminologi, dan pengenalan alat.',
-      duration: '24 Pages', 
-      icon: <Book className="text-emerald-600" />,
-      tag: 'Foundation'
-    },
-    { 
-      title: 'Etika & Aturan Lapangan', 
-      type: 'Booklets', 
-      description: 'Panduan perilaku dan peraturan resmi di lapangan golf.',
-      duration: '15 Pages', 
-      icon: <Book className="text-emerald-600" />,
-      tag: 'Essentials'
-    },
-    // Videos
-    { 
-      title: 'Teknik Swing Dasar', 
-      type: 'Videos', 
-      description: 'Langkah-langkah membangun swing yang konsisten dan powerful.',
-      duration: '12:45', 
-      icon: <PlayCircle className="text-blue-600" />,
-      tag: 'Video'
-    },
-    { 
-      title: 'Mastering Your Putts', 
-      type: 'Videos', 
-      description: 'Cara membaca green dan teknik putting yang akurat.',
-      duration: '08:20', 
-      icon: <PlayCircle className="text-blue-600" />,
-      tag: 'Short Game'
-    },
-    { 
-      title: 'Bunker Escape Masterclass', 
-      type: 'Videos', 
-      description: 'Tips keluar dari bunker dengan satu pukulan.',
-      duration: '10:15', 
-      icon: <PlayCircle className="text-blue-600" />,
-      tag: 'Pro Tips'
-    },
-    // Articles
-    { 
-      title: 'Pentingnya Pemanasan', 
-      type: 'Articles', 
-      description: 'Latihan peregangan khusus golf untuk menghindari cedera.',
-      duration: '5 min read', 
-      icon: <FileText className="text-purple-600" />,
-      tag: 'Health'
-    },
-    { 
-      title: 'Memilih Stick yang Tepat', 
-      type: 'Articles', 
-      description: 'Panduan fitting stick golf sesuai dengan postur dan power.',
-      duration: '8 min read', 
-      icon: <FileText className="text-purple-600" />,
-      tag: 'Equipment'
-    },
-    // Coach Tips
-    { 
-      title: 'Grip Rahasia untuk Akurasi', 
-      type: 'Coach Tips', 
-      description: 'Coach Anang Mulyanto membagikan teknik grip untuk kontrol maksimal.',
-      duration: 'Pro Tip', 
-      icon: <Star className="text-amber-600" />,
-      tag: 'Expert'
-    },
-    { 
-      title: 'Mental Game: Tetap Fokus', 
-      type: 'Coach Tips', 
-      description: 'Tips dari Coach Itang Saepudin untuk menjaga ketenangan saat turnamen.',
-      duration: 'Pro Tip', 
-      icon: <Star className="text-amber-600" />,
-      tag: 'Mindset'
-    },
-    { 
-      title: 'Short Game Mastery', 
-      type: 'Coach Tips', 
-      description: 'Strategi chipping di sekitar green oleh Coach Atep Suwarman.',
-      duration: 'Pro Tip', 
-      icon: <Star className="text-amber-600" />,
-      tag: 'Strategy'
-    },
-  ];
-
-  const filteredContent = activeCategory === 'All' 
-    ? content 
-    : content.filter(item => item.type === activeCategory);
+  const categories = ['All', ...Object.values(TYPE_META).map((m) => m.label)];
+  const content = (data ?? []).map((c) => ({ ...c, typeLabel: TYPE_META[c.type].label, icon: TYPE_META[c.type].icon }));
+  const q = search.trim().toLowerCase();
+  const filteredContent = content.filter(
+    (item) =>
+      (activeCategory === 'All' || item.typeLabel === activeCategory) &&
+      (!q || item.title.toLowerCase().includes(q) || item.description.toLowerCase().includes(q)),
+  );
 
   return (
     <div className="space-y-10 animate-in fade-in slide-in-from-bottom-4 duration-500 pb-10">
@@ -127,6 +57,8 @@ const LearningCenter = () => {
             <input 
               type="text" 
               placeholder="Cari materi, video, atau artikel..." 
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
               className="w-full pl-12 pr-4 py-4 bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl focus:outline-none focus:ring-2 focus:ring-white/50 text-white placeholder:text-emerald-100/40 transition-all"
             />
           </div>
@@ -161,11 +93,13 @@ const LearningCenter = () => {
         ))}
       </div>
 
+      <QueryState isLoading={isLoading} error={error} isEmpty={!isLoading && !error && filteredContent.length === 0} emptyText="Tidak ada materi yang cocok." />
       {/* Content Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-        {filteredContent.map((item, i) => (
+        {filteredContent.map((item) => (
           <div 
-            key={i} 
+            key={item.id}
+            onClick={() => item.url && window.open(item.url, '_blank', 'noopener')}
             className="group bg-white rounded-[40px] p-8 shadow-sm border border-gray-100 hover:shadow-2xl hover:-translate-y-2 transition-all duration-500 cursor-pointer flex flex-col h-full"
           >
             <div className="flex justify-between items-start mb-6">
@@ -211,7 +145,7 @@ const LearningCenter = () => {
             Jika Anda memiliki pertanyaan spesifik tentang materi atau ingin request konten baru, jangan ragu untuk menghubungi pelatih Anda melalui fitur Messages.
           </p>
         </div>
-        <button className="bg-amber-600 hover:bg-amber-700 text-white px-8 py-4 rounded-[24px] font-bold shadow-lg shadow-amber-200 transition-all flex items-center gap-3 whitespace-nowrap">
+        <button onClick={() => navigate(`/portalakademik/${getPortalUser()?.role ?? 'student'}/messages`)} className="bg-amber-600 hover:bg-amber-700 text-white px-8 py-4 rounded-[24px] font-bold shadow-lg shadow-amber-200 transition-all flex items-center gap-3 whitespace-nowrap">
           Hubungi Pelatih <ChevronRight size={20} />
         </button>
       </div>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Download, Bell, ChefHat, Truck, CheckCircle, Clock } from 'lucide-react';
 import api from '../services/api';
+import { PageLoader, Spinner, useKeyedAsyncAction } from '../components/ui/Loading';
 
 const SnackBarOrders = () => {
   const currentAdminLocationId = localStorage.getItem('adminLocationId') || 'karawang';
@@ -8,13 +9,14 @@ const SnackBarOrders = () => {
   const [startDate, setStartDate] = useState(today);
   const [endDate, setEndDate] = useState(today);
   const [orders, setOrders] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [newOrderAlert, setNewOrderAlert] = useState<any>(null);
   const previousOrdersLength = useRef(0);
 
   useEffect(() => {
-    const fetchOrders = async () => {
+    const fetchOrders = async (silent = true) => {
       try {
-        const res = await api.get(`/orders?locationId=${currentAdminLocationId}`);
+        const res = await api.get(`/orders?locationId=${currentAdminLocationId}`, { silent });
         const fetchedOrders = res.data;
         
         // Detect new order if length increased
@@ -32,11 +34,13 @@ const SnackBarOrders = () => {
         setOrders(fetchedOrders);
       } catch (err) {
         console.error('Failed to fetch orders:', err);
+      } finally {
+        setIsLoading(false);
       }
     };
     
-    fetchOrders();
-    const interval = setInterval(fetchOrders, 5000); // Auto-refresh every 5s for better real-time feel
+    fetchOrders(false);
+    const interval = setInterval(() => fetchOrders(true), 5000); // Auto-refresh every 5s for better real-time feel
     return () => clearInterval(interval);
   }, [currentAdminLocationId]);
 
@@ -64,7 +68,7 @@ const SnackBarOrders = () => {
 
   const data = processOrders();
 
-  const handleUpdateStatus = async (orderId: string, newStatus: string) => {
+  const { run: handleUpdateStatus, isPending: isUpdating } = useKeyedAsyncAction(async (orderId: string, newStatus: string) => {
     try {
       await api.patch(`/orders/${orderId}/status`, { status: newStatus });
       // Refresh local data
@@ -74,7 +78,7 @@ const SnackBarOrders = () => {
       console.error('Failed to update status:', err);
       alert('Gagal mengupdate status pesanan.');
     }
-  };
+  });
 
   const formatCurrency = (num: number) => {
     return num.toLocaleString('en-US');
@@ -223,13 +227,13 @@ const SnackBarOrders = () => {
                 <td className="py-5 px-4 align-middle">
                   <div className="flex flex-col gap-2">
                     {row.status === 'PENDING' && (
-                      <button onClick={() => handleUpdateStatus(row.id, 'PREPARING')} className="bg-orange-500 text-white font-bold text-xs px-4 py-2 rounded-lg shadow-md shadow-orange-500/30 hover:bg-orange-600 transition-all active:scale-95">Terima Pesanan</button>
+                      <button onClick={() => handleUpdateStatus(row.id, 'PREPARING')} disabled={isUpdating(row.id)} className="bg-orange-500 text-white font-bold text-xs px-4 py-2 rounded-lg shadow-md shadow-orange-500/30 hover:bg-orange-600 transition-all active:scale-95 disabled:opacity-70 disabled:cursor-wait inline-flex items-center justify-center gap-2">{isUpdating(row.id) && <Spinner size={14} />}Terima Pesanan</button>
                     )}
                     {row.status === 'PREPARING' && (
-                      <button onClick={() => handleUpdateStatus(row.id, 'ON_THE_WAY')} className="bg-blue-500 text-white font-bold text-xs px-4 py-2 rounded-lg shadow-md shadow-blue-500/30 hover:bg-blue-600 transition-all active:scale-95">Kirim Pesanan</button>
+                      <button onClick={() => handleUpdateStatus(row.id, 'ON_THE_WAY')} disabled={isUpdating(row.id)} className="bg-blue-500 text-white font-bold text-xs px-4 py-2 rounded-lg shadow-md shadow-blue-500/30 hover:bg-blue-600 transition-all active:scale-95 disabled:opacity-70 disabled:cursor-wait inline-flex items-center justify-center gap-2">{isUpdating(row.id) && <Spinner size={14} />}Kirim Pesanan</button>
                     )}
                     {row.status === 'ON_THE_WAY' && (
-                      <button onClick={() => handleUpdateStatus(row.id, 'DELIVERED')} className="bg-indigo-500 text-white font-bold text-xs px-4 py-2 rounded-lg shadow-md shadow-indigo-500/30 hover:bg-indigo-600 transition-all active:scale-95">Selesaikan</button>
+                      <button onClick={() => handleUpdateStatus(row.id, 'DELIVERED')} disabled={isUpdating(row.id)} className="bg-indigo-500 text-white font-bold text-xs px-4 py-2 rounded-lg shadow-md shadow-indigo-500/30 hover:bg-indigo-600 transition-all active:scale-95 disabled:opacity-70 disabled:cursor-wait inline-flex items-center justify-center gap-2">{isUpdating(row.id) && <Spinner size={14} />}Selesaikan</button>
                     )}
                   </div>
                 </td>
@@ -237,7 +241,9 @@ const SnackBarOrders = () => {
             ))}
             {data.length === 0 && (
               <tr>
-                <td colSpan={8} className="py-12 text-slate-400 text-center text-lg">Belum ada pesanan masuk.</td>
+                <td colSpan={8} className="py-12 text-slate-400 text-center text-lg">
+                  {isLoading ? <PageLoader label="Memuat pesanan..." className="!py-0" /> : 'Belum ada pesanan masuk.'}
+                </td>
               </tr>
             )}
           </tbody>

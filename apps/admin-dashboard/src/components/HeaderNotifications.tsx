@@ -29,7 +29,7 @@ const HeaderNotifications = () => {
   useEffect(() => {
     const fetchNotifications = async () => {
       try {
-        const response = await api.get('/admin-notifications');
+        const response = await api.get('/admin-notifications', { silent: true });
         const dbNotifs = response.data.map((n: any) => ({
           ...n,
           time: new Date(n.createdAt),
@@ -95,7 +95,7 @@ const HeaderNotifications = () => {
     if (!isOpen) {
       setNotifications(prev => prev.map(n => ({ ...n, read: true })));
       setUnreadCount(0);
-      api.put('/admin-notifications/read').catch(err => console.error(err));
+      api.put('/admin-notifications/read', undefined, { silent: true }).catch(err => console.error(err));
     }
   };
 

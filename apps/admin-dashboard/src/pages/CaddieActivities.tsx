@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Clock, Download, FileText, User } from 'lucide-react';
 import api from '../services/api';
+import { PageLoader } from '../components/ui/Loading';
 import MiniScorecardModal from '../components/MiniScorecardModal';
 
 const CaddieActivities = () => {
@@ -11,14 +12,15 @@ const CaddieActivities = () => {
   const [selectedActivityId, setSelectedActivityId] = useState<string | null>(null);
   const [isScorecardOpen, setIsScorecardOpen] = useState(false);
   const [activities, setActivities] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    const fetchActivities = async () => {
+    const fetchActivities = async (silent = true) => {
       try {
         // Fetch real data from backend
         // We'll use the tournament rounds endpoint for now, but filter it for caddie activities
         // In a real scenario, you'd have a specific endpoint like /caddie-activities
-        const res = await api.get(`/tournaments/rounds`);
+        const res = await api.get(`/tournaments/rounds`, { silent });
         
         if (Array.isArray(res.data)) {
           // Map backend data to our frontend format
@@ -61,12 +63,14 @@ const CaddieActivities = () => {
         }
       } catch (err) {
         console.error('Failed to fetch caddie activities:', err);
+      } finally {
+        setIsLoading(false);
       }
     };
 
-    fetchActivities();
+    fetchActivities(false);
     // Auto refresh every 10 seconds to show real-time updates
-    const interval = setInterval(fetchActivities, 10000);
+    const interval = setInterval(() => fetchActivities(true), 10000);
     return () => clearInterval(interval);
   }, [currentAdminLocationId]);
 
@@ -116,6 +120,13 @@ const CaddieActivities = () => {
               </tr>
             </thead>
             <tbody className="text-slate-600 divide-y divide-slate-50">
+              {activities.length === 0 && (
+                <tr>
+                  <td colSpan={6} className="py-12 text-center text-slate-400">
+                    {isLoading ? <PageLoader label="Memuat aktivitas caddie..." className="!py-0" /> : 'Belum ada aktivitas caddie.'}
+                  </td>
+                </tr>
+              )}
               {activities.map((activity) => (
                 <tr key={activity.id} className="hover:bg-slate-50 transition-colors">
                   <td className="py-4 px-6">

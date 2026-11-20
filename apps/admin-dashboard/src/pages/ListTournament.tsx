@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
+import { PageLoader } from '../components/ui/Loading';
 import { ArrowLeft, Trophy, RefreshCcw } from 'lucide-react';
 
 type TournamentRow = {
@@ -20,7 +21,7 @@ type TournamentRow = {
 const ListTournament = () => {
   const navigate = useNavigate();
   const [tournaments, setTournaments] = useState<TournamentRow[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>('');
 
   const fetchTournaments = async () => {
@@ -137,7 +138,9 @@ const ListTournament = () => {
 
           <button
             onClick={fetchTournaments}
-            className="bg-white hover:bg-slate-50 text-slate-600 p-3 rounded-2xl transition-all border border-slate-200 shadow-sm"
+            disabled={isLoading}
+            aria-label="Muat ulang"
+            className="bg-white hover:bg-slate-50 text-slate-600 p-3 rounded-2xl transition-all border border-slate-200 shadow-sm disabled:opacity-60 disabled:cursor-wait"
           >
             <RefreshCcw size={20} className={isLoading ? 'animate-spin' : ''} />
           </button>
@@ -149,6 +152,9 @@ const ListTournament = () => {
           </div>
         )}
 
+        {isLoading && tournaments.length === 0 ? (
+          <PageLoader label="Memuat daftar tournament..." />
+        ) : (
         <div className="space-y-10">
           <div className="space-y-4">
             <div className="flex items-center justify-between">
@@ -190,6 +196,7 @@ const ListTournament = () => {
             </div>
           </div>
         </div>
+        )}
       </div>
     </div>
   );

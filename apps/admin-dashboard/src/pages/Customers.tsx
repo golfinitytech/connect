@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import api from '../services/api';
+import { PageLoader } from '../components/ui/Loading';
 import { 
   Users, 
   Search, 
@@ -24,6 +25,7 @@ const Customers = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const itemsPerPage = 15;
   const [players, setPlayers] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [groups, setGroups] = useState<any[]>([]);
   const [selectedPlayerForQR, setSelectedPlayerForQR] = useState<any>(null);
   const [isQRModalOpen, setIsQRModalOpen] = useState(false);
@@ -92,7 +94,7 @@ const Customers = () => {
       }
     };
 
-    loadData();
+    loadData().finally(() => setIsLoading(false));
     window.addEventListener('storage', loadData);
     return () => window.removeEventListener('storage', loadData);
   }, []);
@@ -384,7 +386,9 @@ const Customers = () => {
         </div>
 
         {/* Content Section */}
-        {filteredPlayers.length > 0 ? (
+        {isLoading ? (
+          <PageLoader label="Memuat data pemain..." />
+        ) : filteredPlayers.length > 0 ? (
           <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
             {viewMode === 'grid' ? (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

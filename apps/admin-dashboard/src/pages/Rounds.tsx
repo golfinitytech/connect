@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
+import { Spinner } from '../components/ui/Loading';
 import { 
   ChevronRight, 
   RefreshCcw, 
@@ -119,7 +120,9 @@ const Rounds = () => {
           <div className="flex items-center gap-4">
             <button 
               onClick={loadRealTimeData}
-              className="bg-white hover:bg-slate-50 text-slate-600 p-3 rounded-2xl transition-all border border-slate-200 shadow-sm"
+              disabled={isLoading}
+              aria-label="Muat ulang"
+              className="bg-white hover:bg-slate-50 text-slate-600 p-3 rounded-2xl transition-all border border-slate-200 shadow-sm disabled:opacity-60 disabled:cursor-wait"
             >
               <RefreshCcw size={20} className={isLoading ? 'animate-spin' : ''} />
             </button>
@@ -174,6 +177,19 @@ const Rounds = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50 text-slate-700">
+                {rounds.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="px-8 py-12">
+                      {isLoading ? (
+                        <div className="flex items-center justify-center gap-3 text-slate-400 font-bold text-sm">
+                          <Spinner size={18} className="text-emerald-600" /> Memuat data grup...
+                        </div>
+                      ) : (
+                        <p className="text-center text-slate-400 font-bold italic">Belum ada grup pada turnamen aktif.</p>
+                      )}
+                    </td>
+                  </tr>
+                )}
                 {rounds.map((row, i) => (
                   <tr key={i} className={`hover:bg-slate-50/50 transition-colors group ${row.isRealTime ? 'bg-blue-50/30' : ''}`}>
                     <td className="px-8 py-6 font-black text-slate-800 italic">{row.start}</td>

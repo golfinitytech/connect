@@ -25,7 +25,7 @@ const OrderTrackingModal: React.FC<OrderTrackingModalProps> = ({ isOpen, onClose
 
     const fetchOrders = async () => {
       try {
-        const res = await api.get(`/orders?locationId=${locationId}`);
+        const res = await api.get(`/orders?locationId=${locationId}`, { silent: true });
         // Calculate queue (orders that are pending or preparing from ALL caddies)
         const activeQueue = res.data.filter((o: any) => o.status === 'PENDING' || o.status === 'PREPARING');
         setQueueCount(activeQueue.length);

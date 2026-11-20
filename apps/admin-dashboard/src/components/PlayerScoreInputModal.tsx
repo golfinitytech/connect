@@ -1,6 +1,7 @@
 import React from 'react';
 import { ChevronDown, Check } from 'lucide-react';
 import api from '../services/api';
+import { Spinner, useAsyncAction } from './ui/Loading';
 
 interface Player {
   id: number;
@@ -28,9 +29,7 @@ const PlayerScoreInputModal = ({
   selectedCaddie,
   onSelectCaddie
 }: PlayerScoreInputModalProps) => {
-  if (!isOpen) return null;
-
-  const handleSave = async () => {
+  const { run: handleSave, pending: saving } = useAsyncAction(async () => {
     try {
       const selectedPlayer = players.find(p => p.id === selectedPlayerId);
       if (selectedPlayer && selectedPlayer.name && selectedPlayer.name !== '-' && selectedPlayer.name !== '') {
@@ -49,11 +48,13 @@ const PlayerScoreInputModal = ({
     }
     
     onClose();
-  };
+  });
+
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-[160] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" onClick={() => !saving && onClose()} />
       
       <div className="relative bg-[#f1f5f9] w-full max-w-lg rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in duration-200 p-8">
         <div className="space-y-6">
@@ -109,15 +110,18 @@ const PlayerScoreInputModal = ({
           <div className="flex gap-4 pt-4">
             <button 
               onClick={onClose}
-              className="flex-1 py-4 border-2 border-slate-300 text-slate-800 font-bold rounded-xl text-xl hover:bg-slate-50 transition-colors"
+              disabled={saving}
+              className="flex-1 py-4 border-2 border-slate-300 text-slate-800 font-bold rounded-xl text-xl hover:bg-slate-50 transition-colors disabled:opacity-40"
             >
               Batal
             </button>
             <button 
               onClick={handleSave}
-              className="flex-1 py-4 bg-blue-500 text-white font-bold rounded-xl text-xl hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/20"
+              disabled={saving}
+              className="flex-1 py-4 bg-blue-500 text-white font-bold rounded-xl text-xl hover:bg-blue-600 transition-colors shadow-lg shadow-blue-500/20 disabled:opacity-70 disabled:cursor-wait flex items-center justify-center gap-2"
             >
-              Simpan
+              {saving && <Spinner size={20} />}
+              {saving ? 'Menyimpan...' : 'Simpan'}
             </button>
           </div>
         </div>

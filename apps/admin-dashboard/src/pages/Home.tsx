@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Users, CheckCircle2, Clock, Smartphone, Trophy, ChevronRight, MessageCircle, X } from 'lucide-react';
+import { Spinner, useAsyncAction } from '../components/ui/Loading';
 
 const Home = () => {
   const [stats, setStats] = useState({
@@ -15,11 +16,14 @@ const Home = () => {
   const [chatDraft, setChatDraft] = useState('');
   const [chatMessages, setChatMessages] = useState<Array<{ id: string; ts: number; to: 'control' | 'all' | 'marshal'; fromRole: 'caddie' | 'admin' | 'marshal'; from: string; text: string }>>([]);
 
-  const loadRealTimeStats = async () => {
+  // True until the first stats load finishes; later refreshes are silent.
+  const [statsLoading, setStatsLoading] = useState(true);
+
+  const loadRealTimeStats = async (silent = false) => {
     try {
       // @ts-ignore
       const { default: api } = await import('../services/api');
-      const response = await api.get('/tournaments/active');
+      const response = await api.get('/tournaments/active', { silent });
       const tournamentData = response.data || null;
       
       const dbGroups = tournamentData?.groups || [];
@@ -83,6 +87,8 @@ const Home = () => {
       console.error('Failed to load real time stats from API:', error);
       setActivities([]);
       setStats(s => ({ ...s, activeRounds: 0, completedToday: 0, totalPlayers: 0, lastUpdate: new Date().toLocaleTimeString() }));
+    } finally {
+      setStatsLoading(false);
     }
   };
 
@@ -99,7 +105,7 @@ const Home = () => {
     loadRealTimeStats();
     
     // Auto refresh stats every 10 seconds
-    const interval = setInterval(loadRealTimeStats, 10000);
+    const interval = setInterval(() => loadRealTimeStats(true), 10000);
 
     const handleStorage = () => {
       loadDeviceCount();
@@ -120,7 +126,7 @@ const Home = () => {
       try {
         // @ts-ignore
         const { default: api } = await import('../services/api');
-        const res = await api.get('/tournaments/chat');
+        const res = await api.get('/tournaments/chat', { silent: true });
         setChatMessages(Array.isArray(res.data) ? res.data : []);
       } catch {
         setChatMessages([]);
@@ -131,7 +137,7 @@ const Home = () => {
     return () => clearInterval(interval);
   }, [isChatOpen]);
 
-  const appendChatMessage = async (payload: { to: 'control' | 'all' | 'marshal'; text: string }) => {
+  const { run: appendChatMessage, pending: sendingChat } = useAsyncAction(async (payload: { to: 'control' | 'all' | 'marshal'; text: string }) => {
     const text = payload.text.trim();
     if (!text) return;
     try {
@@ -145,7 +151,7 @@ const Home = () => {
       });
     } catch {}
     setChatDraft('');
-  };
+  });
 
   const visibleChatMessages = chatMessages
     .filter((m) => m?.to === chatRecipient)
@@ -198,7 +204,7 @@ const Home = () => {
         <StatCard 
           icon={<Clock className="text-blue-500" />} 
           label="Active Rounds" 
-          value={stats.activeRounds} 
+          value={statsLoading ? <Spinner size={20} className="text-slate-300" /> : stats.activeRounds} 
           subValue="Live on field"
           color="blue"
         />
@@ -212,20 +218,20 @@ const Home = () => {
         <StatCard 
           icon={<CheckCircle2 className="text-purple-500" />} 
           label="Completed Today" 
-          value={stats.completedToday} 
+          value={statsLoading ? <Spinner size={20} className="text-slate-300" /> : stats.completedToday} 
           subValue="18 Holes finished"
           color="purple"
         />
         <StatCard 
           icon={<Users className="text-orange-500" />} 
           label="Total Players" 
-          value={stats.totalPlayers} 
+          value={statsLoading ? <Spinner size={20} className="text-slate-300" /> : stats.totalPlayers} 
           subValue="Registered in tournament"
           color="orange"
         />
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col justify-center">
           <span className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-1">Last Sync</span>
-          <span className="text-xl font-black text-slate-700">{stats.lastUpdate}</span>
+          <span className="text-xl font-black text-slate-700">{statsLoading ? <Spinner size={20} className="text-slate-300" /> : stats.lastUpdate}</span>
           <span className="text-[10px] text-blue-500 font-bold mt-1">● Connected to Tablets</span>
         </div>
       </div>
@@ -313,7 +319,15 @@ const Home = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50 text-slate-700">
-              {activities.length > 0 ? activities.map((row, i) => (
+              {statsLoading ? (
+                <tr>
+                  <td colSpan={7} className="px-8 py-10">
+                    <div className="flex items-center justify-center gap-3 text-slate-400 font-bold text-sm">
+                      <Spinner size={18} className="text-emerald-600" /> Memuat aktivitas turnamen...
+                    </div>
+                  </td>
+                </tr>
+              ) : activities.length > 0 ? activities.map((row, i) => (
                 <tr key={i} className="hover:bg-slate-50/50 transition-colors">
                   <td className="px-8 py-5 font-bold text-slate-400">{row.no}</td>
                   <td className="px-8 py-5 font-medium text-slate-600">{row.id}</td>
@@ -421,17 +435,20 @@ const Home = () => {
                         appendChatMessage({ to: chatRecipient, text: chatDraft });
                       }}
                       placeholder="Kirim pesan..."
-                      className="flex-1 h-12 rounded-xl bg-[#0d1830] border border-white/10 text-white/90 px-4 text-[14px] font-semibold outline-none"
+                      disabled={sendingChat}
+                      className="disabled:opacity-60 flex-1 h-12 rounded-xl bg-[#0d1830] border border-white/10 text-white/90 px-4 text-[14px] font-semibold outline-none"
                     />
                     <button
                       type="button"
                       onClick={() => appendChatMessage({ to: chatRecipient, text: chatDraft })}
-                      className="h-12 w-12 rounded-xl bg-rose-600 hover:bg-rose-500 active:scale-[0.98] transition-all flex items-center justify-center"
+                      disabled={sendingChat}
+                      aria-label="Kirim pesan"
+                      className="h-12 w-12 rounded-xl bg-rose-600 hover:bg-rose-500 disabled:opacity-70 disabled:cursor-wait active:scale-[0.98] transition-all flex items-center justify-center"
                     >
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                      {sendingChat ? <Spinner size={18} className="text-white" /> : <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
                         <path d="M22 2L11 13" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                         <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="white" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                      </svg>
+                      </svg>}
                     </button>
                   </div>
                 </div>

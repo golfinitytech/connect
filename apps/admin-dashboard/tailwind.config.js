@@ -15,6 +15,12 @@ export default {
         muted: '#60706A',
         'dark-sidebar': '#1A1F26',
       },
+      keyframes: {
+        progress: {
+          '0%': { transform: 'translateX(-100%)' },
+          '100%': { transform: 'translateX(300%)' },
+        },
+      },
       fontFamily: {
         sans: ['Montserrat', 'sans-serif'],
         teko: ['Teko', 'sans-serif'],

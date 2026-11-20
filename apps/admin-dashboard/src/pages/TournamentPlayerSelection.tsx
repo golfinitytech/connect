@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import api from '../services/api';
+import { Spinner, useAsyncAction } from '../components/ui/Loading';
 import LeaderboardModal from '../components/LeaderboardModal';
 import { 
   Search, 
@@ -135,7 +136,7 @@ const TournamentPlayerSelection = () => {
   };
 
   // Step 1: 3-digit tournament code
-  const loadTournamentByCode = async (codeInput?: string) => {
+  const loadTournamentByCodeImpl = async (codeInput?: string) => {
     const code = (codeInput ?? tournamentCode).trim();
     setError('');
     setFoundPlayer(null);
@@ -177,7 +178,7 @@ const TournamentPlayerSelection = () => {
   };
 
   // Step 2: flight number
-  const handleSearch = async () => {
+  const handleSearchImpl = async () => {
     setError('');
     setFoundPlayer(null);
     if (!accessInfo) {
@@ -223,6 +224,10 @@ const TournamentPlayerSelection = () => {
     }
   };
 
+  // Wrapped so Enter-key / repeated taps can't fire a second request while one is running.
+  const { run: loadTournamentByCode } = useAsyncAction(loadTournamentByCodeImpl);
+  const { run: handleSearch } = useAsyncAction(handleSearchImpl);
+
   const handleStartGame = () => {
     if (!foundPlayer) return;
     const sessionData = {
@@ -243,7 +248,7 @@ const TournamentPlayerSelection = () => {
     navigate('../tournament-mode/scorecard');
   };
 
-  const handleMarshalAccess = async () => {
+  const handleMarshalAccessImpl = async () => {
     const code = marshalTournamentCode.trim();
     if (!/^\d{3}$/.test(code)) {
       setError('Kode turnamen harus 3 angka.');
@@ -264,6 +269,8 @@ const TournamentPlayerSelection = () => {
       setShowPasswordModal(false);
     }
   };
+
+  const { run: handleMarshalAccess, pending: marshalChecking } = useAsyncAction(handleMarshalAccessImpl);
 
   return (
     <div className="min-h-screen bg-[#004741] text-slate-100 p-6 font-sans flex flex-col items-center">
@@ -364,7 +371,7 @@ const TournamentPlayerSelection = () => {
                   disabled={isLoading}
                   className="w-full py-5 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 rounded-[24px] flex items-center justify-center gap-3 transition-all active:scale-95 text-white font-black uppercase tracking-widest text-sm shadow-xl shadow-blue-600/20"
                 >
-                  <Search size={20} />
+                  {isLoading ? <Spinner size={20} /> : <Search size={20} />}
                   {isLoading ? 'Memuat...' : 'Lanjut'}
                 </button>
               </div>
@@ -374,7 +381,7 @@ const TournamentPlayerSelection = () => {
                   <label className="text-xs font-black uppercase tracking-[0.25em] text-white/70">
                     Langkah 2 · Nomor Flight
                   </label>
-                  <button onClick={resetTournament} className="text-[11px] font-bold text-white/70 underline">
+                  <button onClick={resetTournament} disabled={isLoading} className="text-[11px] font-bold text-white/70 underline disabled:opacity-50">
                     Ganti turnamen ({accessInfo.code})
                   </button>
                 </div>
@@ -397,8 +404,8 @@ const TournamentPlayerSelection = () => {
                   disabled={isLoading}
                   className="w-full py-5 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 rounded-[24px] flex items-center justify-center gap-3 transition-all active:scale-95 text-white font-black uppercase tracking-widest text-sm shadow-xl shadow-blue-600/20"
                 >
-                  <Search size={20} />
-                  {isLoading ? 'Memuat...' : 'Cari Flight'}
+                  {isLoading ? <Spinner size={20} /> : <Search size={20} />}
+                  {isLoading ? 'Mencari...' : 'Cari Flight'}
                 </button>
               </div>
             )}
@@ -535,6 +542,7 @@ const TournamentPlayerSelection = () => {
                     if (e.key === 'Enter') handleMarshalAccess();
                   }}
                   placeholder="PIN Marshal"
+                  disabled={marshalChecking}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-4 text-center font-black tracking-[0.3em] text-slate-700 outline-none focus:border-blue-500 transition-all placeholder:tracking-normal placeholder:font-medium"
                   autoFocus
                 />
@@ -544,15 +552,18 @@ const TournamentPlayerSelection = () => {
                       setShowPasswordModal(false);
                       setMarshalPassword('');
                     }}
-                    className="py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-100 transition-colors"
+                    disabled={marshalChecking}
+                    className="py-3 rounded-xl font-bold text-slate-500 hover:bg-slate-100 transition-colors disabled:opacity-40"
                   >
                     CANCEL
                   </button>
                   <button
                     onClick={handleMarshalAccess}
-                    className="py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-lg shadow-blue-600/20 transition-all active:scale-95"
+                    disabled={marshalChecking}
+                    className="py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-70 disabled:cursor-wait text-white rounded-xl font-bold shadow-lg shadow-blue-600/20 transition-all active:scale-95 flex items-center justify-center gap-2"
                   >
-                    ACCESS
+                    {marshalChecking && <Spinner size={16} />}
+                    {marshalChecking ? 'MEMERIKSA...' : 'ACCESS'}
                   </button>
                 </div>
               </div>

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
+import { LoadingOverlay, PageLoader, Spinner } from '../components/ui/Loading';
 import { QRCodeCanvas } from 'qrcode.react';
 import { 
   Users, 
@@ -28,6 +29,21 @@ const TournamentPlayers = () => {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const loadedTournamentKeyRef = useRef<string>('');
+  // Blocking overlay for any write to the server; the ref also blocks re-entry (double clicks).
+  const [busy, setBusy] = useState<string | null>(null);
+  const busyRef = useRef(false);
+  const withBusy = async <T,>(label: string, fn: () => Promise<T>): Promise<T | undefined> => {
+    if (busyRef.current) return undefined;
+    busyRef.current = true;
+    setBusy(label);
+    try {
+      return await fn();
+    } finally {
+      busyRef.current = false;
+      setBusy(null);
+    }
+  };
+  const [pageLoading, setPageLoading] = useState(true);
   const currentAdminLocation = localStorage.getItem('adminLocation') || 'Padang Golf Sulaiman';
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   const [searchTerm, setSearchTerm] = useState('');
@@ -242,7 +258,7 @@ const TournamentPlayers = () => {
       }
     };
 
-    loadData();
+    loadData().finally(() => setPageLoading(false));
   }, []);
 
   const flights = [
@@ -640,61 +656,70 @@ const TournamentPlayers = () => {
 
 
   const deletePlayer = (id: number) => {
-    if (window.confirm('Are you sure you want to delete this player?')) {
-      const savedData = localStorage.getItem('active_tournament');
-      if (savedData) {
-        const parsedData = JSON.parse(savedData);
-        const updatedPlayers = parsedData.players.filter((p: any) => p.id !== id);
-        
-        // Also update groups to remove player
-        const updatedGroups = (parsedData.groups || []).map((g: any) => ({
-          ...g,
-          players: g.players.filter((p: any) => p.id !== id)
-        })).filter((g: any) => g.players.length > 0);
+    if (!window.confirm('Are you sure you want to delete this player?')) return;
+    const savedData = localStorage.getItem('active_tournament');
+    if (!savedData) return;
+    const parsedData = JSON.parse(savedData);
+    const updatedPlayers = parsedData.players.filter((p: any) => p.id !== id);
 
-        const newData = { ...parsedData, players: updatedPlayers, groups: updatedGroups };
+    // Also update groups to remove player
+    const updatedGroups = (parsedData.groups || []).map((g: any) => ({
+      ...g,
+      players: g.players.filter((p: any) => p.id !== id)
+    })).filter((g: any) => g.players.length > 0);
+
+    const newData = { ...parsedData, players: updatedPlayers, groups: updatedGroups };
+
+    withBusy('Menghapus pemain...', async () => {
+      try {
+        // Only apply locally once the server has accepted the change.
+        await api.post('/tournaments', newData);
         localStorage.setItem('active_tournament', JSON.stringify(newData));
-        
-        // Sync to API if needed
-        api.post('/tournaments', newData).catch(err => console.warn('Failed to sync delete to API', err));
-
         setPlayers(updatedPlayers);
         setFlightGroups(updatedGroups);
+      } catch (err: any) {
+        console.error('Failed to delete player', err);
+        alert(`Gagal menghapus pemain: ${err?.response?.data?.message || err?.message || 'periksa koneksi'}`);
       }
-    }
+    });
   };
 
   const handleEditSave = () => {
     if (!editingPlayer) return;
 
     const savedData = localStorage.getItem('active_tournament');
-    if (savedData) {
-      const parsedData = JSON.parse(savedData);
-      
-      // Update in players list
-      const updatedPlayers = parsedData.players.map((p: any) => 
+    if (!savedData) return;
+    const parsedData = JSON.parse(savedData);
+
+    // Update in players list
+    const updatedPlayers = parsedData.players.map((p: any) => 
+      p.id === editingPlayer.id ? { ...p, ...editingPlayer } : p
+    );
+
+    // Update in groups list
+    const updatedGroups = (parsedData.groups || []).map((g: any) => ({
+      ...g,
+      players: g.players.map((p: any) => 
         p.id === editingPlayer.id ? { ...p, ...editingPlayer } : p
-      );
-      
-      // Update in groups list
-      const updatedGroups = (parsedData.groups || []).map((g: any) => ({
-        ...g,
-        players: g.players.map((p: any) => 
-          p.id === editingPlayer.id ? { ...p, ...editingPlayer } : p
-        )
-      }));
+      )
+    }));
 
-      const newData = { ...parsedData, players: updatedPlayers, groups: updatedGroups };
-      localStorage.setItem('active_tournament', JSON.stringify(newData));
-      
-      // Sync to API
-      api.post('/tournaments', newData).catch(err => console.warn('Failed to sync edit to API', err));
+    const newData = { ...parsedData, players: updatedPlayers, groups: updatedGroups };
 
-      setPlayers(updatedPlayers);
-      setFlightGroups(updatedGroups);
-      setIsEditModalOpen(false);
-      setEditingPlayer(null);
-    }
+    withBusy('Menyimpan perubahan...', async () => {
+      try {
+        await api.post('/tournaments', newData);
+        localStorage.setItem('active_tournament', JSON.stringify(newData));
+        setPlayers(updatedPlayers);
+        setFlightGroups(updatedGroups);
+        setIsEditModalOpen(false);
+        setEditingPlayer(null);
+      } catch (err: any) {
+        // Keep the modal open so nothing typed is lost.
+        console.error('Failed to save player edit', err);
+        alert(`Gagal menyimpan perubahan: ${err?.response?.data?.message || err?.message || 'periksa koneksi'}`);
+      }
+    });
   };
 
   const handleSetMarshalPin = async () => {
@@ -705,20 +730,23 @@ const TournamentPlayers = () => {
       alert('PIN harus 4 angka.');
       return;
     }
-    try {
-      await api.patch(`/tournaments/${tournamentInfo.id}/settings`, { marshalPin: pin.trim() });
-      alert(`PIN marshal untuk turnamen ${tournamentInfo.code || ''} sudah diganti.`);
-    } catch (err) {
-      console.error(err);
-      alert('Gagal mengganti PIN marshal.');
-    }
+    await withBusy('Menyimpan PIN marshal...', async () => {
+      try {
+        await api.patch(`/tournaments/${tournamentInfo.id}/settings`, { marshalPin: pin.trim() });
+        alert(`PIN marshal untuk turnamen ${tournamentInfo.code || ''} sudah diganti.`);
+      } catch (err) {
+        console.error(err);
+        alert('Gagal mengganti PIN marshal.');
+      }
+    });
   };
 
   const deleteAllPlayers = async () => {
     if (window.confirm('CRITICAL: This will delete ALL tournament data (Players, Groups, and Scores). Are you sure?')) {
+      await withBusy('Mengarsipkan turnamen...', async () => {
       try {
-        // 1. Try to delete from API first
-        await api.delete('/tournaments').catch(err => console.warn('API delete failed, proceeding with local clear:', err));
+        // 1. Server first: if it fails, keep everything as-is so the screen matches the database.
+        await api.delete('/tournaments');
         
         // 2. Clear all local storage related to tournament
         localStorage.removeItem('active_tournament');
@@ -740,10 +768,11 @@ const TournamentPlayers = () => {
         setFlightGroups([]);
         
         alert('All tournament data has been successfully cleared.');
-      } catch (error) {
+      } catch (error: any) {
         console.error('Error in deleteAllPlayers:', error);
-        alert('An error occurred while deleting data.');
+        alert(`Gagal menghapus data turnamen: ${error?.response?.data?.message || error?.message || 'periksa koneksi'}`);
       }
+      });
     }
   };
 
@@ -846,7 +875,9 @@ const TournamentPlayers = () => {
           archivePrevious: true
         };
         
-        // Save to Database MySQL via API
+        // Save to the database via API
+        busyRef.current = true;
+        setBusy(`Mengimpor ${newPlayers.length} pemain...`);
         api.post('/tournaments', tournamentToUpdate)
           .then((res) => {
             const savedTournament = res.data;
@@ -907,6 +938,10 @@ const TournamentPlayers = () => {
             console.error('Error saving imported players to DB:', err);
             const errorMsg = err.response?.data?.message || err.message || 'Unknown error';
             alert(`Players imported locally but failed to save to database: ${errorMsg}`);
+          })
+          .finally(() => {
+            busyRef.current = false;
+            setBusy(null);
           });
       }
     };
@@ -1119,6 +1154,7 @@ const TournamentPlayers = () => {
       archivePrevious: true
     };
 
+    await withBusy('Mengaktifkan grup...', async () => {
     try {
       const res = await api.post('/tournaments', tournamentData);
       const savedTournament = res.data;
@@ -1167,6 +1203,7 @@ const TournamentPlayers = () => {
       console.error('Error activating groups:', err);
       alert('Gagal Activate group.');
     }
+    });
   };
 
   const downloadQR = (playerName: string) => {
@@ -1206,8 +1243,13 @@ const TournamentPlayers = () => {
   const activeGroup = flightGroups[safeActiveGroupIndex];
   const activeGroupColor = groupColors[safeActiveGroupIndex % groupColors.length];
 
+  if (pageLoading) {
+    return <PageLoader label="Memuat data turnamen..." className="min-h-[60vh]" />;
+  }
+
   return (
     <div className="min-h-screen bg-slate-50/50 text-slate-900 p-3 sm:p-4 lg:p-6 font-sans">
+      <LoadingOverlay show={!!busy} label={busy ?? ''} />
       <div className="w-full">
         {/* Simple Header */}
         <div className="sticky top-16 z-20 flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8 bg-white/95 backdrop-blur p-5 sm:p-6 lg:p-8 rounded-[24px] border border-slate-200 shadow-sm">
@@ -2249,8 +2291,10 @@ const TournamentPlayers = () => {
               </button>
               <button 
                 onClick={handleEditSave}
-                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-black uppercase tracking-widest transition-colors shadow-lg shadow-blue-500/30"
+                disabled={!!busy}
+                className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-70 disabled:cursor-wait text-white rounded-xl font-black uppercase tracking-widest transition-colors shadow-lg shadow-blue-500/30 flex items-center gap-2"
               >
+                {busy && <Spinner size={16} />}
                 Simpan Perubahan
               </button>
             </div>

@@ -18,6 +18,7 @@ import {
 
 import ScoreSubmissionModal from './ScoreSubmissionModal';
 import IncompleteRoundModal from './IncompleteRoundModal';
+import { Spinner, useAsyncAction } from './ui/Loading';
 
 interface DashboardMenuProps {
   onOpenRoundSettings: () => void;
@@ -47,6 +48,34 @@ const DashboardMenu = ({
   const navigate = useNavigate();
   const cameraInputRef = React.useRef<HTMLInputElement>(null);
   const galleryInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Start progress - create an activity in the backend
+  const { run: startRound, pending: startingRound } = useAsyncAction(async () => {
+    const locationId = localStorage.getItem('adminLocationId') || 'karawang';
+    const savedScores = localStorage.getItem('golf_players_scores');
+    let currentPlayers = playerData;
+    if (savedScores) {
+      try {
+        currentPlayers = JSON.parse(savedScores);
+      } catch (e) {}
+    }
+    
+    try {
+      // @ts-ignore
+      const { default: api } = await import('../services/api');
+      await api.post('/tournaments/rounds', {
+        locationId,
+        caddieCode: caddieId,
+        players: currentPlayers.map(p => ({ name: p.name || 'Unknown' })),
+        startTime: new Date().toISOString(),
+        isCompleted: false
+      });
+    } catch (e) {
+      console.error('Failed to start round activity', e);
+    }
+
+    navigate('../scorecard');
+  });
 
   // State for modals
   const [isScoreSubmissionOpen, setIsScoreSubmissionOpen] = useState(false);
@@ -225,36 +254,12 @@ const DashboardMenu = ({
               <div className="flex items-center gap-4">
                 <span className="text-blue-500 font-bold text-lg mr-4">OUT</span>
                 <button 
-                  onClick={async () => {
-                    // Start progress - create an activity in the backend
-                    const locationId = localStorage.getItem('adminLocationId') || 'karawang';
-                    const savedScores = localStorage.getItem('golf_players_scores');
-                    let currentPlayers = playerData;
-                    if (savedScores) {
-                      try {
-                        currentPlayers = JSON.parse(savedScores);
-                      } catch (e) {}
-                    }
-                    
-                    try {
-                      // @ts-ignore
-                      const { default: api } = await import('../services/api');
-                      await api.post('/tournaments/rounds', {
-                        locationId,
-                        caddieCode: caddieId,
-                        players: currentPlayers.map(p => ({ name: p.name || 'Unknown' })),
-                        startTime: new Date().toISOString(),
-                        isCompleted: false
-                      });
-                    } catch (e) {
-                      console.error('Failed to start round activity', e);
-                    }
-                    
-                    navigate('../scorecard');
-                  }}
-                  className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-blue-500/20 active:scale-95"
+                  onClick={startRound}
+                  disabled={startingRound}
+                  className="flex-1 bg-blue-500 hover:bg-blue-600 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-blue-500/20 active:scale-95 disabled:opacity-70 disabled:cursor-wait flex items-center justify-center gap-2"
                 >
-                  Mulai
+                  {startingRound && <Spinner size={18} />}
+                  {startingRound ? 'Memulai...' : 'Mulai'}
                 </button>
                 <button className="flex-1 border-2 border-slate-200 text-slate-300 font-bold py-3.5 rounded-xl cursor-not-allowed">
                   Selesai

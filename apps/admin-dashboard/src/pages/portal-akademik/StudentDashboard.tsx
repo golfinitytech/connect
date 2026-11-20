@@ -18,46 +18,39 @@ import {
   LayoutDashboard
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
+import { getPortalUser, initials, useMe, useStats } from '../../services/academyApi';
+import type { StudentStats } from '../../services/academyApi';
 
 const StudentDashboard = () => {
   const navigate = useNavigate();
 
-  const storedUser = localStorage.getItem('portalUser');
-  const user = storedUser ? JSON.parse(storedUser) : null;
-
-  const getInitials = (name: string) => {
-    return name.split(' ').map(n => n[0]).join('').toUpperCase().substring(0, 2);
-  };
+  const { data: me } = useMe();
+  const { data: st } = useStats<StudentStats>();
+  const user = me ?? getPortalUser();
 
   const studentName = user?.name || 'Student';
-  const studentInitials = user?.name ? getInitials(user.name) : 'S';
-
-  // Logic to determine coach based on login (same logic as in StudentManagement)
-  let coachName = 'Ana Suhana'; // Default
-  if (['Regi', 'Hadi', 'Fakih', 'Ridho'].includes(studentName)) {
-    coachName = 'Anang Mulyanto';
-  } else if (studentName === 'John Doe') {
-    coachName = 'Apep Benhur';
-  }
+  const studentInitials = initials(user?.name ?? 'S');
+  const coachName = user?.coach?.name ?? 'Belum ditentukan';
+  const levelLabel = st?.currentSublevel ?? user?.program?.level ?? '-';
 
   const stats = [
-    { label: 'Total Sessions', value: '24', icon: <Target className="text-blue-600" />, bg: 'bg-blue-50' },
-    { label: 'Current Level', value: '1a', icon: <Trophy className="text-amber-600" />, bg: 'bg-amber-50' },
-    { label: 'Attendance', value: '92%', icon: <Calendar className="text-emerald-600" />, bg: 'bg-emerald-50' },
-    { label: 'Next Milestone', value: '85%', icon: <TrendingUp className="text-purple-600" />, bg: 'bg-purple-50' },
+    { label: 'Sesi Selesai', value: st ? String(st.completedSessions) : '…', icon: <Target className="text-blue-600" />, bg: 'bg-blue-50' },
+    { label: 'Current Level', value: levelLabel.replace(/^Level\s*/i, ''), icon: <Trophy className="text-amber-600" />, bg: 'bg-amber-50' },
+    { label: 'Attendance', value: st ? (st.attendance == null ? '-' : `${st.attendance}%`) : '…', icon: <Calendar className="text-emerald-600" />, bg: 'bg-emerald-50' },
+    { label: 'Progres Silabus', value: st ? `${st.syllabusProgress}%` : '…', icon: <TrendingUp className="text-purple-600" />, bg: 'bg-purple-50' },
   ];
 
   const menuItems = [
-    { name: 'Dashboard', icon: <LayoutDashboard size={28} />, path: '/student/dashboard', color: 'text-teal-600', bg: 'bg-teal-50' },
-    { name: 'My Training Program', icon: <Target size={28} />, path: '/student/program', color: 'text-emerald-600', bg: 'bg-emerald-50' },
-    { name: 'Syllabus', icon: <BookOpen size={28} />, path: '/student/syllabus', color: 'text-blue-600', bg: 'bg-blue-50' },
-    { name: 'Session Tracker', icon: <History size={28} />, path: '/student/tracker', color: 'text-indigo-600', bg: 'bg-indigo-50' },
-    { name: 'Performance & Evaluation', icon: <BarChart2 size={28} />, path: '/student/evaluation', color: 'text-purple-600', bg: 'bg-purple-50' },
-    { name: 'Learning Center', icon: <GraduationCap size={28} />, path: '/student/learning', color: 'text-orange-600', bg: 'bg-orange-50' },
-    { name: 'Schedule', icon: <Calendar size={28} />, path: '/student/schedule', color: 'text-red-600', bg: 'bg-red-50' },
-    { name: 'Messages', icon: <MessageSquare size={28} />, path: '/student/messages', color: 'text-blue-600', bg: 'bg-blue-50' },
-    { name: 'Feedback', icon: <Star size={28} />, path: '/student/feedback', color: 'text-yellow-600', bg: 'bg-yellow-50' },
-    { name: 'Profile', icon: <User size={28} />, path: '/student/profile', color: 'text-gray-600', bg: 'bg-gray-50' },
+    { name: 'Dashboard', icon: <LayoutDashboard size={28} />, path: '/portalakademik/student/dashboard', color: 'text-teal-600', bg: 'bg-teal-50' },
+    { name: 'My Training Program', icon: <Target size={28} />, path: '/portalakademik/student/program', color: 'text-emerald-600', bg: 'bg-emerald-50' },
+    { name: 'Syllabus', icon: <BookOpen size={28} />, path: '/portalakademik/student/syllabus', color: 'text-blue-600', bg: 'bg-blue-50' },
+    { name: 'Session Tracker', icon: <History size={28} />, path: '/portalakademik/student/tracker', color: 'text-indigo-600', bg: 'bg-indigo-50' },
+    { name: 'Performance & Evaluation', icon: <BarChart2 size={28} />, path: '/portalakademik/student/evaluation', color: 'text-purple-600', bg: 'bg-purple-50' },
+    { name: 'Learning Center', icon: <GraduationCap size={28} />, path: '/portalakademik/student/learning', color: 'text-orange-600', bg: 'bg-orange-50' },
+    { name: 'Schedule', icon: <Calendar size={28} />, path: '/portalakademik/student/schedule', color: 'text-red-600', bg: 'bg-red-50' },
+    { name: 'Messages', icon: <MessageSquare size={28} />, path: '/portalakademik/student/messages', color: 'text-blue-600', bg: 'bg-blue-50' },
+    { name: 'Feedback', icon: <Star size={28} />, path: '/portalakademik/student/feedback', color: 'text-yellow-600', bg: 'bg-yellow-50' },
+    { name: 'Profile', icon: <User size={28} />, path: '/portalakademik/student/profile', color: 'text-gray-600', bg: 'bg-gray-50' },
   ];
 
   return (
@@ -77,7 +70,7 @@ const StudentDashboard = () => {
           <div className="w-12 h-12 rounded-xl bg-[#004d40] flex items-center justify-center text-white font-bold">{studentInitials}</div>
           <div className="pr-4">
             <p className="text-sm font-bold text-gray-900 leading-none">{studentName}</p>
-            <p className="text-[10px] text-emerald-600 font-bold uppercase tracking-widest mt-1">Student • Level 1a</p>
+            <p className="text-[10px] text-emerald-600 font-bold uppercase tracking-widest mt-1">Student • {levelLabel}</p>
           </div>
         </div>
       </div>
@@ -108,7 +101,7 @@ const StudentDashboard = () => {
       <div className="pt-4">
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-2xl font-bold text-gray-900">Statistik Latihan</h2>
-          <button className="text-emerald-600 font-bold text-sm hover:underline">Lihat Detail</button>
+          <button onClick={() => navigate('/portalakademik/student/evaluation')} className="text-emerald-600 font-bold text-sm hover:underline">Lihat Detail</button>
         </div>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
           {stats.map((stat, i) => (
