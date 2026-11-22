@@ -117,3 +117,6 @@ kiosk_*.json
 google-services.json
 GoogleService-Info.plist
 golfinity-1f5a1-*.json
+
+# Vercel
+.vercel
