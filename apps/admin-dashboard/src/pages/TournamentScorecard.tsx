@@ -201,6 +201,9 @@ const TournamentScorecard = () => {
       const data = res.data;
       setTournamentInfo(data.tournament);
       if (Array.isArray(data.tournament?.pars)) setServerPars(data.tournament.pars);
+      // Once the server has a start hole for this flight (first score, or set by admin), it wins.
+      const serverStart = Number(data.flight?.startHole);
+      if (Number.isInteger(serverStart) && serverStart >= 1 && serverStart <= 18) setStartHoleNumber(serverStart);
       const padded = padPlayers(data.players);
       setPlayers(padded);
       localStorage.setItem(`tournament_scores_${sess.flight}`, JSON.stringify(padded));
@@ -465,31 +468,44 @@ const TournamentScorecard = () => {
     }
   };
 
+  // ── Hole sequence (same rules as the server) ────────────────────────────────
+  // Holes are played in order from the start hole (6 -> 6..18, 1..5). A hole is done when
+  // every player's score is confirmed (player approval / marshal) or OUT; only the first
+  // hole that is not done can be scored.
+  const activeRoster = players.filter((p) => p.name !== '-' && !String(p.id).startsWith('empty-'));
+  const cellOf = (p: any, hole: number) => ({
+    score: p?.scores?.[nineOf(hole)]?.[idxOf(hole)],
+    approved: !!p?.approvals?.[nineOf(hole)]?.[idxOf(hole)],
+    marshal: !!p?.marshalEdited?.[nineOf(hole)]?.[idxOf(hole)],
+  });
+  const holeHasScore = (p: any, hole: number) => {
+    const { score } = cellOf(p, hole);
+    return score === 'OUT' || (typeof score === 'number' && score > 0);
+  };
+  const holeDone = (p: any, hole: number) => {
+    const c = cellOf(p, hole);
+    return c.score === 'OUT' || (holeHasScore(p, hole) && (c.approved || c.marshal));
+  };
+  const playOrder = Array.from({ length: 18 }, (_, i) => ((startHoleNumber - 1 + i) % 18) + 1);
+  const currentHole: number | null = activeRoster.length
+    ? playOrder.find((h) => !activeRoster.every((p) => holeDone(p, h))) ?? null
+    : null;
+  const hasAnyProgress = activeRoster.some((p) => playOrder.some((h) => holeHasScore(p, h)));
+  const isHoleLocked = (hole: number) => currentHole !== null && hole !== currentHole && !activeRoster.every((p) => holeDone(p, hole));
+
+  // Follow the flight onto the next nine when it moves there.
+  useEffect(() => {
+    if (currentHole !== null) setActiveNine(nineOf(currentHole));
+  }, [currentHole]);
+
   const handleScoreClick = (player: any, holeNum: number, currentScore: number | null) => {
     if (isTotalInputMode || player.name === '-') return;
     if (savingCells.has(`${player.id}:${holeNum}`)) return; // previous save for this cell still running
 
-    const activePlayers = players.filter(p => p.name !== '-');
-    const hasAnyProgress = activePlayers.some(p => {
-      const scoresIn = Array.isArray(p?.scores?.IN) ? p.scores.IN : [];
-      const scoresOut = Array.isArray(p?.scores?.OUT) ? p.scores.OUT : [];
-      const approvalsIn = Array.isArray(p?.approvals?.IN) ? p.approvals.IN : [];
-      const approvalsOut = Array.isArray(p?.approvals?.OUT) ? p.approvals.OUT : [];
-      const marshalIn = Array.isArray(p?.marshalEdited?.IN) ? p.marshalEdited.IN : [];
-      const marshalOut = Array.isArray(p?.marshalEdited?.OUT) ? p.marshalEdited.OUT : [];
-
-      const anyScore = [...scoresIn, ...scoresOut].some(s => (typeof s === 'number' && s > 0) || s === 'OUT');
-      const anyApproval = [...approvalsIn, ...approvalsOut].some(Boolean);
-      const anyMarshal = [...marshalIn, ...marshalOut].some(Boolean);
-      return anyScore || anyApproval || anyMarshal;
-    });
-
     if (!hasAnyProgress && holeNum !== startHoleNumber) {
-      setStartHoleNumber(holeNum);
-      setActiveNine(holeNum <= 9 ? 'IN' : 'OUT');
+      showNotice(`Start hole flight ini: ${startHoleNumber}. Kalau salah, ubah di pilihan START HOLE di atas.`, 'error');
+      return;
     }
-
-    // Caddie can input score from any hole, restriction removed as requested.
 
     // Check if score is already approved
     const holeIndex = holeData[activeNine].findIndex(h => h.num === holeNum);
@@ -504,6 +520,11 @@ const TournamentScorecard = () => {
         currentScore: currentScore
       });
       setIsMarshalModalOpen(true);
+      return;
+    }
+
+    if (currentHole !== null && holeNum !== currentHole) {
+      showNotice(`Hole ${holeNum} terkunci. Isi & konfirmasi skor hole ${currentHole} dulu.`, 'error');
       return;
     }
 
@@ -580,7 +601,7 @@ const TournamentScorecard = () => {
 
     pendingSavesRef.current += 1;
     try {
-      const body: any = { playerId: player.id, hole, strokes, out: isOut, groupCode: String(session.flight), actorName };
+      const body: any = { playerId: player.id, hole, strokes, out: isOut, groupCode: String(session.flight), actorName, startHole: startHoleNumber };
       if (marshalPin) {
         await api.post(`/tournaments/${session.tournamentId}/scores/marshal-edit`, {
           ...body,
@@ -595,18 +616,7 @@ const TournamentScorecard = () => {
         });
       }
 
-      // OUT = player withdraws: mark every hole without a score as OUT too.
-      if (isOut) {
-        for (let h = 1; h <= 18; h++) {
-          if (h === hole) continue;
-          const sc = player.scores?.[nineOf(h)]?.[idxOf(h)];
-          if (sc === 0 || sc === null || sc === undefined || sc === '') {
-            await api
-              .put(`/tournaments/${session.tournamentId}/scores`, { playerId: player.id, hole: h, out: true, groupCode: String(session.flight), actorName })
-              .catch((e) => console.warn('Failed to mark OUT on hole', h, e));
-          }
-        }
-      }
+      // OUT = player withdraws: the server marks the player's remaining holes OUT.
 
       if (strokes !== null || isOut) {
         notifyAdmin(hole, player.name, isOut ? 'OUT' : (strokes as number), isOut || !!marshalPin, !!marshalPin);
@@ -655,7 +665,16 @@ const TournamentScorecard = () => {
       return;
     }
 
+    // Mark a save in flight so polling doesn't overwrite optimistic state, but release it
+    // *before* the refresh below (refreshFlight skips while saves are pending).
     pendingSavesRef.current += 1;
+    let released = false;
+    const release = () => {
+      if (!released) {
+        released = true;
+        pendingSavesRef.current -= 1;
+      }
+    };
     try {
       await api.post(`/tournaments/${session.tournamentId}/scores/validate`, {
         playerIds: ids,
@@ -664,6 +683,7 @@ const TournamentScorecard = () => {
         groupCode: String(session.flight),
       });
       approvalData.players.forEach((ap) => notifyAdmin(hole, ap.playerName, ap.score, true, false));
+      release();
       await refreshFlight(undefined, true).catch(() => {});
       setIsApprovalModalOpen(false);
       setApprovalData(null);
@@ -672,7 +692,7 @@ const TournamentScorecard = () => {
       // Keep the modal open so the caddie can retry.
       showNotice(apiMessage(err, 'Gagal konfirmasi skor.'), 'error');
     } finally {
-      pendingSavesRef.current -= 1;
+      release();
     }
   };
 
@@ -680,41 +700,25 @@ const TournamentScorecard = () => {
   const { run: handleConfirmApproval, pending: approving } = useAsyncAction(handleConfirmApprovalImpl);
 
   const handleManualConfirmPlayer = () => {
-    const activePlayers = players.filter(p => p.name !== '-');
-    
-    let targetHoleIndex = -1;
-    
-    for (let i = 0; i < currentHoles.length; i++) {
-      const allFilled = activePlayers.every(p => {
-        const score = p?.scores?.[activeNine]?.[i];
-        return (score !== null && typeof score === 'number' && score > 0) || score === 'OUT';
-      });
-      
-      const anyNeedsApproval = activePlayers.some(p => {
-         const score = p?.scores?.[activeNine]?.[i];
-         if (score === 'OUT') return false; 
-         return !p?.approvals?.[activeNine]?.[i] && !p?.marshalEdited?.[activeNine]?.[i];
-      });
-
-      if (allFilled && anyNeedsApproval) {
-        targetHoleIndex = i;
-        break;
-      }
+    if (currentHole === null) {
+      showNotice('Semua hole sudah dikonfirmasi.', 'info');
+      return;
     }
-
-    if (targetHoleIndex !== -1) {
-      setApprovalData({
-        holeNumber: currentHoles[targetHoleIndex].num,
-        players: activePlayers.filter(p => p?.scores?.[activeNine]?.[targetHoleIndex] !== 'OUT').map(p => ({
-          playerId: p.id,
-          playerName: p.name,
-          score: p?.scores?.[activeNine]?.[targetHoleIndex]
-        }))
-      });
-      setIsApprovalModalOpen(true);
-    } else {
-      showNotice('Tidak ada hole yang siap untuk disetujui (pastikan semua skor pemain sudah terisi untuk hole tersebut).', 'error');
+    const missing = activeRoster.filter((p) => !holeHasScore(p, currentHole));
+    if (missing.length > 0) {
+      showNotice(`Isi skor hole ${currentHole} untuk semua pemain dulu (${missing.map((p) => p.name).join(', ')}).`, 'error');
+      return;
     }
+    const toConfirm = activeRoster.filter((p) => !holeDone(p, currentHole));
+    setApprovalData({
+      holeNumber: currentHole,
+      players: toConfirm.map((p) => ({
+        playerId: p.id,
+        playerName: p.name,
+        score: cellOf(p, currentHole).score,
+      })),
+    });
+    setIsApprovalModalOpen(true);
   };
 
   if (!session || !tournamentInfo) {
@@ -772,6 +776,8 @@ const TournamentScorecard = () => {
                 <span className="bg-orange-600/20 text-orange-400 px-2 py-0.5 rounded border border-orange-500/20">START HOLE :</span>
                 <select
                   value={startHoleNumber}
+                  disabled={hasAnyProgress}
+                  title={hasAnyProgress ? 'Start hole terkunci setelah skor pertama masuk' : 'Pilih start hole flight'}
                   onChange={(e) => {
                     const next = Number(e.target.value);
                     if (!Number.isFinite(next)) return;
@@ -866,8 +872,12 @@ const TournamentScorecard = () => {
             
             <div className="flex-1 flex items-center justify-around px-4 bg-slate-50">
               {currentHoles.map((hole) => (
-                <div key={`hole-${hole.num}`} className="flex-1 flex items-center justify-center py-1.5 mx-1">
-                  <span className="text-base text-slate-800 leading-none">{hole.num}</span>
+                <div
+                  key={`hole-${hole.num}`}
+                  className={`flex-1 flex items-center justify-center gap-1 py-1.5 mx-1 rounded-lg ${hole.num === currentHole ? 'bg-blue-600 text-white' : ''}`}
+                >
+                  {isHoleLocked(hole.num) && <Lock size={10} className="text-slate-300" />}
+                  <span className={`text-base leading-none ${hole.num === currentHole ? 'text-white' : isHoleLocked(hole.num) ? 'text-slate-300' : 'text-slate-800'}`}>{hole.num}</span>
                 </div>
               ))}
             </div>
@@ -941,12 +951,13 @@ const TournamentScorecard = () => {
                     const isApproved = activeApprovals[sIdx];
                     const isMarshalEdited = activeMarshalEdits[sIdx];
                     const isSaving = savingCells.has(`${player.id}:${currentHoles[sIdx].num}`);
+                    const locked = !isEmpty && isHoleLocked(currentHoles[sIdx].num);
                     return (
                       <div 
                         key={sIdx} 
                         onClick={() => handleScoreClick(player, currentHoles[sIdx].num, score)}
                         aria-busy={isSaving}
-                        className={`flex-1 flex flex-col items-center justify-center py-2 border-r border-slate-100 last:border-r-0 transition-all relative ${isTotalInputMode ? 'opacity-10 scale-90' : 'opacity-100'} ${!isEmpty ? (isSaving ? 'cursor-wait rounded mx-1 bg-blue-50/60' : 'cursor-pointer hover:bg-blue-50/50 rounded mx-1') : ''} ${isMarshalEdited ? 'bg-orange-50' : isApproved ? 'bg-emerald-50' : ''}`}
+                        className={`flex-1 flex flex-col items-center justify-center py-2 border-r border-slate-100 last:border-r-0 transition-all relative ${isTotalInputMode ? 'opacity-10 scale-90' : 'opacity-100'} ${!isEmpty ? (isSaving ? 'cursor-wait rounded mx-1 bg-blue-50/60' : locked ? 'cursor-not-allowed rounded mx-1 opacity-40' : 'cursor-pointer hover:bg-blue-50/50 rounded mx-1') : ''} ${!isEmpty && currentHoles[sIdx].num === currentHole ? 'ring-2 ring-blue-500/40 rounded' : ''} ${isMarshalEdited ? 'bg-orange-50' : isApproved ? 'bg-emerald-50' : ''}`}
                       >
                         {isSaving && (
                           <div className="absolute bottom-0.5 right-0.5">

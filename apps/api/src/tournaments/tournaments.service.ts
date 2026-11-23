@@ -24,6 +24,7 @@ import {
   resolvePars,
   ScoreValidationError,
   toLegacyPlayer,
+  flightProgress,
 } from './tournament-scoring';
 
 type Tx = Prisma.TransactionClient;
@@ -581,6 +582,69 @@ export class TournamentsService {
     return this.leaderboard(t.id);
   }
 
+  /**
+   * Live position of every flight in the active tournament: which hole it is on
+   * (first hole in play order not confirmed by all players), progress and last activity.
+   */
+  async activeTracker(course?: string) {
+    const t = await this.getActiveTournament(course);
+    if (!t) return null;
+    const groups = await this.prisma.tournamentGroup.findMany({
+      where: { tournamentId: t.id },
+      orderBy: [{ number: 'asc' }, { code: 'asc' }],
+      select: {
+        id: true,
+        code: true,
+        number: true,
+        startHole: true,
+        flightType: true,
+        caddieData: true,
+        players: { select: { id: true, name: true }, orderBy: { code: 'asc' } },
+      },
+    });
+    const allIds = groups.flatMap((g) => g.players.map((p) => p.id));
+    const { rows, stateOf } = await this.groupState(this.prisma, allIds);
+    const lastByPlayer = new Map<string, Date>();
+    for (const r of rows) {
+      const prev = lastByPlayer.get(r.playerId);
+      if (!prev || r.updatedAt > prev) lastByPlayer.set(r.playerId, r.updatedAt);
+    }
+
+    const flights = groups.map((g) => {
+      const ids = g.players.map((p) => p.id);
+      const startHole = g.startHole ?? 1;
+      const progress = flightProgress(startHole, ids, stateOf);
+      const last = ids
+        .map((id) => lastByPlayer.get(id))
+        .filter((d): d is Date => !!d)
+        .sort((a, b) => b.getTime() - a.getTime())[0];
+      const caddie = (g.caddieData ?? null) as { number?: string; name?: string } | null;
+      return {
+        id: g.id,
+        code: g.code,
+        number: g.number,
+        flightType: g.flightType,
+        startHole,
+        startHoleSet: g.startHole != null,
+        players: g.players.map((p) => p.name),
+        caddie: caddie ? { number: caddie.number ?? null, name: caddie.name ?? null } : null,
+        currentHole: progress.currentHole,
+        holesDone: progress.holesDone,
+        started: progress.started,
+        finished: progress.finished,
+        awaitingConfirmation: progress.awaitingConfirmation,
+        lastActivityAt: last ?? null,
+      };
+    });
+
+    return {
+      tournament: { id: t.id, name: t.name, code: t.code, course: t.course, isFinished: !!t.finishedAt },
+      pars: resolvePars(t.pars),
+      flights,
+      generatedAt: new Date(),
+    };
+  }
+
   async scoreLogs(tournamentId: string, limit = 200) {
     return this.prisma.tournamentScoreLog.findMany({
       where: { tournamentId },
@@ -614,6 +678,57 @@ export class TournamentsService {
   }
 
   /** Caddie input. Rejected once the hole has been validated by the player. */
+  /** Score rows of a group's players, as `stateOf` for flightProgress(). */
+  private async groupState(tx: Tx | PrismaService, playerIds: string[]) {
+    const rows = await tx.tournamentScore.findMany({
+      where: { playerId: { in: playerIds } },
+      select: { playerId: true, hole: true, strokes: true, isOut: true, status: true, updatedAt: true },
+    });
+    const byKey = new Map(rows.map((r) => [`${r.playerId}:${r.hole}`, r]));
+    const stateOf = (playerId: string, hole: number) => {
+      const r = byKey.get(`${playerId}:${hole}`);
+      const hasScore = !!r && (r.isOut || r.strokes !== null);
+      return { hasScore, done: hasScore && (r!.isOut || r!.status === TournamentScoreStatus.VALIDATED) };
+    };
+    return { rows, stateOf };
+  }
+
+  /**
+   * Caddies must play holes in order from the flight's start hole, and confirm a hole
+   * before moving on. Throws 409 HOLE_ORDER otherwise. Marshal edits are not checked.
+   */
+  private async assertHoleInSequence(
+    tx: Tx,
+    player: { groupId: string | null },
+    dto: EnterScoreDto,
+  ) {
+    if (!player.groupId) return;
+    const group = await tx.tournamentGroup.findUnique({
+      where: { id: player.groupId },
+      select: { id: true, startHole: true, players: { select: { id: true } } },
+    });
+    if (!group) return;
+    const ids = group.players.map((p) => p.id);
+    const { rows, stateOf } = await this.groupState(tx, ids);
+
+    let start = group.startHole;
+    if (start == null) {
+      // Older flights that already have scores but no recorded start: don't block them.
+      if (rows.length > 0) return;
+      start = dto.startHole ?? dto.hole;
+      await tx.tournamentGroup.update({ where: { id: group.id }, data: { startHole: start } });
+    }
+
+    const { currentHole } = flightProgress(start, ids, stateOf);
+    if (currentHole !== null && dto.hole !== currentHole) {
+      throw new ConflictException({
+        message: `Hole ${dto.hole} belum bisa diisi. Isi dan konfirmasi skor hole ${currentHole} dulu.`,
+        code: 'HOLE_ORDER',
+        currentHole,
+      });
+    }
+  }
+
   async enterScore(tournamentId: string, dto: EnterScoreDto) {
     await this.getWritableTournament(tournamentId);
     const isOut = this.checkScoreInput(dto);
@@ -644,6 +759,8 @@ export class TournamentsService {
             current: existing,
           });
         }
+
+        await this.assertHoleInSequence(tx, player, dto);
 
         // Clearing an unvalidated score.
         if (!isOut && strokes === null) {
@@ -693,6 +810,33 @@ export class TournamentsService {
                 ...(isOut ? { validatedAt: new Date(), validatedBy: dto.actorName } : {}),
               },
             });
+
+        // A player who is OUT is out for the rest of the round: mark every hole
+        // without a score as OUT too, so the flight can keep moving.
+        if (isOut) {
+          const scored = await tx.tournamentScore.findMany({
+            where: { playerId: player.id },
+            select: { hole: true },
+          });
+          const have = new Set(scored.map((r) => r.hole));
+          const now = new Date();
+          const missing = Array.from({ length: 18 }, (_, i) => i + 1).filter((h) => !have.has(h));
+          if (missing.length) {
+            await tx.tournamentScore.createMany({
+              data: missing.map((h) => ({
+                tournamentId,
+                playerId: player.id,
+                hole: h,
+                strokes: null,
+                isOut: true,
+                status: TournamentScoreStatus.VALIDATED,
+                enteredBy: dto.actorName,
+                validatedAt: now,
+                validatedBy: dto.actorName,
+              })),
+            });
+          }
+        }
 
         await tx.tournamentScoreLog.create({
           data: {

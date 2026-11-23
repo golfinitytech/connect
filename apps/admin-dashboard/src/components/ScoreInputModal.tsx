@@ -20,75 +20,61 @@ const ScoreInputModal = ({
   parValue,
   onSave 
 }: ScoreInputModalProps) => {
+  // Empty = nothing typed yet; the par is shown only as a placeholder.
   const [value, setValue] = useState<string>('');
+  // The first key press replaces whatever is shown (placeholder or previous score)
+  // instead of appending to it ("4" then "5" -> "5", not "45").
+  const [fresh, setFresh] = useState(true);
 
   React.useEffect(() => {
     if (isOpen) {
-      if (currentScore && currentScore !== 0) {
-        setValue(currentScore.toString());
-      } else if (parValue) {
-        setValue(parValue.toString());
-      } else {
-        setValue('0');
-      }
+      setValue(currentScore && currentScore !== 0 ? currentScore.toString() : '');
+      setFresh(true);
     }
-  }, [isOpen, currentScore, parValue]);
+  }, [isOpen, currentScore]);
 
   if (!isOpen) return null;
 
+  const MAX_STROKES = 15;
+  const numeric = value === '' || value === 'OUT' ? null : parseInt(value, 10);
+  const isValid = value === 'OUT' || (numeric !== null && numeric >= 1 && numeric <= MAX_STROKES);
+
   const handleNumberClick = (num: string) => {
     setValue(prev => {
-      if (prev === 'OUT') return num;
-      // If current value is just '0', replace it with the new number
-      if (prev === '0') return num;
-      // Otherwise append if length < 2
+      if (fresh || prev === 'OUT' || prev === '' || prev === '0') return num === '0' ? '' : num;
       if (prev.length < 2) return prev + num;
       return prev;
     });
+    setFresh(false);
   };
 
   const handleDelete = () => {
-    setValue(prev => {
-      if (prev === 'OUT') return '0';
-      const newVal = prev.slice(0, -1);
-      return newVal === '' ? '0' : newVal;
-    });
+    setValue(prev => (prev === 'OUT' ? '' : prev.slice(0, -1)));
+    setFresh(false);
   };
 
   const handleClear = () => {
-    setValue('0');
+    setValue('');
+    setFresh(false);
   };
 
+  // +/- start from the par when nothing has been entered yet.
+  const base = () => (numeric ?? parValue ?? 0);
   const handleDecrement = () => {
-    setValue(prev => {
-      if (prev === 'OUT') return prev;
-      const current = prev === '' ? 0 : parseInt(prev);
-      if (current > 0) {
-        return (current - 1).toString();
-      }
-      return '0';
-    });
+    if (value === 'OUT') return;
+    setValue(String(Math.max(1, numeric === null ? base() - 1 : numeric - 1)));
+    setFresh(false);
   };
 
   const handleIncrement = () => {
-    setValue(prev => {
-      if (prev === 'OUT') return prev;
-      const current = prev === '' ? 0 : parseInt(prev);
-      if (current < 99) {
-        return (current + 1).toString();
-      }
-      return prev;
-    });
+    if (value === 'OUT') return;
+    setValue(String(Math.min(MAX_STROKES, numeric === null ? base() + 1 : numeric + 1)));
+    setFresh(false);
   };
 
   const handleSave = () => {
-    if (value === 'OUT') {
-      onSave('OUT');
-    } else {
-      // If value is '0', pass null so it represents an empty/unset score in the main table
-      const numValue = (value === '' || value === '0') ? null : parseInt(value);
-      onSave(numValue);
-    }
+    if (!isValid) return;
+    onSave(value === 'OUT' ? 'OUT' : numeric);
     onClose();
   };
 
@@ -122,9 +108,11 @@ const ScoreInputModal = ({
           </button>
 
           <div className="w-24 h-24 bg-slate-100 rounded-2xl flex items-center justify-center border-2 border-slate-200">
-            <span className="text-5xl font-black text-slate-800">
-              {value || '-'}
-            </span>
+            {value ? (
+              <span className={`font-black text-slate-800 ${value === 'OUT' ? 'text-3xl' : 'text-5xl'}`}>{value}</span>
+            ) : (
+              <span className="text-5xl font-black text-slate-300" title="Par (placeholder)">{parValue ?? '-'}</span>
+            )}
           </div>
 
           <button 
@@ -177,11 +165,15 @@ const ScoreInputModal = ({
 
         {/* Save Button */}
         <div className="px-6 pb-6">
+          {numeric !== null && numeric > MAX_STROKES && (
+            <p className="mb-2 text-center text-xs font-bold text-red-600">Skor maksimal {MAX_STROKES}.</p>
+          )}
           <button
             onClick={handleSave}
-            className="w-full py-4 bg-blue-600 hover:bg-blue-500 active:scale-[0.98] transition-all rounded-2xl text-xl font-black text-white shadow-xl shadow-blue-600/30"
+            disabled={!isValid}
+            className="w-full py-4 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed active:scale-[0.98] transition-all rounded-2xl text-xl font-black text-white shadow-xl shadow-blue-600/30"
           >
-            SIMPAN SKOR
+            {value === '' ? 'KETUK ANGKA SKOR' : 'SIMPAN SKOR'}
           </button>
         </div>
       </div>

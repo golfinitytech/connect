@@ -24,6 +24,7 @@ import TournamentPlayers from './pages/TournamentPlayers';
 import TournamentConfiguration from './pages/TournamentConfiguration';
 import TournamentRules from './pages/TournamentRules';
 import LiveScoreGroup from './pages/LiveScoreGroup';
+import FlightTracker from './pages/FlightTracker';
 import TournamentPlayerSelection from './pages/TournamentPlayerSelection';
 import TournamentScorecard from './pages/TournamentScorecard';
 import LandingPage from './pages/LandingPage';
@@ -145,6 +146,7 @@ function App() {
                 <Route path="/rounds/tournament-configuration" element={<TournamentConfiguration />} />
                 <Route path="/rounds/tournament-rules" element={<TournamentRules />} />
                 <Route path="/rounds/live-score" element={<LiveScoreGroup />} />
+                <Route path="/rounds/flight-tracker" element={<FlightTracker />} />
                 <Route path="/rounds/course" element={<Rounds />} />
                 <Route path="/customers" element={<Customers />} />
                 <Route path="/customers/message" element={<MessageHistory />} />

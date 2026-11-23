@@ -41,6 +41,12 @@ export class TournamentsController {
     return this.tournamentsService.activeLeaderboard(course);
   }
 
+  /** Where every flight of the active tournament is (hole, progress, last activity). */
+  @Get('active/tracker')
+  activeTracker(@Query('course') course?: string) {
+    return this.tournamentsService.activeTracker(course);
+  }
+
   /** Archives the active tournament (it used to delete ALL tournaments). */
   @Delete()
   archiveActive(@Query('course') course?: string) {

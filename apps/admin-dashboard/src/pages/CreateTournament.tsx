@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
+import GroupingRulesEditor from '../components/GroupingRulesEditor';
+import { assignFlight, autoGroup, sortedFlights, useGroupingRules } from '../lib/flightRules';
 import { 
   Trophy, 
   Users, 
@@ -59,11 +61,9 @@ const CreateTournament = () => {
   // State for Step 3: Flight Grouping
   const [groupingMode, setGroupingMode] = useState<'auto' | 'manual'>('auto');
   const [manualGroups, setManualGroups] = useState<{ id: string; name: string; players: any[] }[]>([]);
-  const [flights, setFlights] = useState([
-    { id: 'A', label: 'Flight A', minHcp: 1, maxHcp: 13, description: 'Jika HCP 1-13' },
-    { id: 'B', label: 'Flight B', minHcp: 14, maxHcp: 21, description: 'Jika HCP 14-21' },
-    { id: 'C', label: 'Flight C', minHcp: 22, maxHcp: 28, description: 'Jika HCP 22-28' }
-  ]);
+  // Auto-grouping rules are configurable (see GroupingRulesEditor) and shared with Tournament Players.
+  const [groupingRules, setGroupingRules] = useGroupingRules();
+  const flights = sortedFlights(groupingRules);
 
   const addManualGroup = () => {
     setManualGroups([...manualGroups, { id: `group-${Date.now()}`, name: `FLIGHT ${manualGroups.length + 1}`, players: [] }]);
@@ -190,99 +190,7 @@ const CreateTournament = () => {
     </div>
   );
 
-  const autoGroupPlayers = (playersList: any[]) => {
-    const playersWithFlight = playersList.map(p => {
-      const hcp = parseInt(p.handicap) || 0;
-      let flight = 'C';
-      if (hcp >= 1 && hcp <= 13) flight = 'A';
-      else if (hcp >= 14 && hcp <= 21) flight = 'B';
-      return { ...p, flight };
-    });
-
-    const playersA = playersWithFlight.filter(p => p.flight === 'A');
-    const playersB = playersWithFlight.filter(p => p.flight === 'B');
-    const playersC = playersWithFlight.filter(p => p.flight === 'C');
-
-    const groups: any[][] = [];
-
-    // 1. Group C (Must be separate, 2-4 players)
-    let poolC = [...playersC];
-    while (poolC.length > 0) {
-      let size = Math.min(poolC.length, 4);
-      if (poolC.length === 5) size = 3; // Split 5 into 3 and 2
-      
-      // Handle the "1 player left" case
-      if (poolC.length === 1 && groups.length > 0) {
-        const lastGroup = groups[groups.length - 1];
-        if (lastGroup.length > 2) {
-          // Take one from last group to make a group of 2
-          const borrowedPlayer = lastGroup.pop();
-          groups.push([borrowedPlayer, poolC.shift()]);
-          continue;
-        } else {
-          // Last group only has 2, make it a group of 3
-          lastGroup.push(poolC.shift());
-          continue;
-        }
-      }
-      
-      groups.push(poolC.splice(0, size));
-    }
-
-    // 2. Group A & B (Can mix, 2-4 players)
-    // Rule: NO 3xA + 1xB
-    let poolAB = [...playersA, ...playersB];
-    poolAB.sort((a, b) => (a.flight === 'B' ? -1 : 1));
-
-    while (poolAB.length > 0) {
-      let size = Math.min(poolAB.length, 4);
-      if (poolAB.length === 5) size = 3;
-
-      // Handle the "1 player left" case for AB
-      if (poolAB.length === 1 && groups.length > 0) {
-        // Find a group that is NOT purely Flight C
-        const lastABGroupIndex = [...groups].reverse().findIndex(g => g[0].flight !== 'C');
-        if (lastABGroupIndex !== -1) {
-          const actualIndex = groups.length - 1 - lastABGroupIndex;
-          const lastABGroup = groups[actualIndex];
-          if (lastABGroup.length > 2) {
-            const borrowedPlayer = lastABGroup.pop();
-            groups.push([borrowedPlayer, poolAB.shift()]);
-          } else {
-            lastABGroup.push(poolAB.shift());
-          }
-          continue;
-        }
-      }
-
-      let currentGroup = poolAB.slice(0, size);
-      const countA = currentGroup.filter(p => p.flight === 'A').length;
-      const countB = currentGroup.filter(p => p.flight === 'B').length;
-
-      // Check forbidden 3xA + 1xB
-      if (size === 4 && countA === 3 && countB === 1) {
-        // Try to find another B in the pool to swap with one A
-        const poolBIndex = poolAB.findIndex((p, i) => i >= size && p.flight === 'B');
-        if (poolBIndex !== -1) {
-          // Swap
-          const aIndexInGroup = currentGroup.findIndex(p => p.flight === 'A');
-          const aPlayer = poolAB[aIndexInGroup];
-          poolAB[aIndexInGroup] = poolAB[poolBIndex];
-          poolAB[poolBIndex] = aPlayer;
-          currentGroup = poolAB.slice(0, size);
-        } else {
-          // No more B's. Must split the group to avoid 3xA+1xB.
-          // Use size 3 (which would be 3xA or 2xA+1xB - both OK)
-          size = 3;
-          currentGroup = poolAB.slice(0, size);
-        }
-      }
-
-      groups.push(poolAB.splice(0, size));
-    }
-
-    return groups;
-  };
+  const autoGroupPlayers = (playersList: any[]) => autoGroup(playersList, groupingRules).groups;
 
   return (
     <div className="min-h-screen bg-slate-50/50 text-slate-900 p-8 font-sans">
@@ -590,36 +498,12 @@ const CreateTournament = () => {
 
             {groupingMode === 'auto' ? (
               <>
-                {/* Rules Summary Card */}
-                <div className="bg-white border border-slate-200 rounded-[32px] p-8 shadow-sm">
-                  <div className="flex items-center gap-4 mb-6">
-                    <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center border border-blue-100">
-                      <Layers className="text-blue-600" size={24} />
-                    </div>
-                    <div>
-                      <h2 className="text-xl font-black uppercase italic tracking-widest text-slate-800">Auto-Grouping Rules</h2>
-                      <p className="text-slate-400 text-[10px] font-black uppercase tracking-widest">Sistem akan membagi pemain secara otomatis</p>
-                    </div>
-                  </div>
-                  
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                    {[
-                      "Flight A (HCP 1-13) & B (HCP 14-21) boleh satu flight",
-                      "Flight C (HCP 22-28) harus terpisah dari A & B",
-                      "Flight C hanya boleh dengan sesama Flight C",
-                      "TIDAK BOLEH: 1 orang Flight B & 3 orang Flight A",
-                      "BOLEH: 1 orang Flight A & 3 orang Flight B",
-                      "Minimal 2 orang & Maksimal 4 orang per flight"
-                    ].map((rule, i) => (
-                      <div key={i} className="flex items-start gap-3 bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                        <div className="w-5 h-5 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0 mt-0.5">
-                          <div className="w-1.5 h-1.5 rounded-full bg-blue-600" />
-                        </div>
-                        <span className="text-xs font-bold text-slate-600 leading-relaxed">{rule}</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
+                {/* Rules (editable) */}
+                <GroupingRulesEditor
+                  rules={groupingRules}
+                  onChange={setGroupingRules}
+                  warnings={players.length ? autoGroup(players, groupingRules).warnings : []}
+                />
 
                 {/* Group Categories Display */}
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
@@ -955,13 +839,7 @@ const CreateTournament = () => {
 
                     const tournamentData = {
                       info: tournamentInfo,
-                      players: players.map(p => {
-                        const hcp = parseInt(p.handicap) || 0;
-                        let flight = 'C';
-                        if (hcp >= 1 && hcp <= 13) flight = 'A';
-                        else if (hcp >= 14 && hcp <= 21) flight = 'B';
-                        return { ...p, flight };
-                      }),
+                      players: players.map(p => ({ ...p, flight: assignFlight(p.handicap, groupingRules) })),
                       groups: groupsWithCodes,
                       publishedAt: new Date().toISOString()
                     };

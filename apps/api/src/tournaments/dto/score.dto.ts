@@ -59,6 +59,14 @@ export class EnterScoreDto extends WithCourse {
   @IsString()
   @MaxLength(20)
   groupCode?: string;
+
+  /** Flight's start hole as set on the tablet; recorded with the flight's first score. */
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(18)
+  startHole?: number;
 }
 
 export class ValidateScoresDto extends WithCourse {

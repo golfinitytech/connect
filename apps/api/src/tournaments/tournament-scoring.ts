@@ -276,3 +276,50 @@ export function toLegacyPlayer<T extends { id: string }>(player: T, rows: Legacy
   }
   return { ...player, manualTotal: null, scores, approvals, marshalEdited, versions };
 }
+
+// ── Hole sequence (shotgun / tee-time starts) ──────────────────────────────
+
+/** Play order for a flight starting at `startHole`: e.g. 6 -> 6..18, 1..5. */
+export function holeOrder(startHole: number): number[] {
+  const start = Number.isInteger(startHole) && startHole >= 1 && startHole <= HOLES ? startHole : 1;
+  return Array.from({ length: HOLES }, (_, i) => ((start - 1 + i) % HOLES) + 1);
+}
+
+export type HoleState = { hasScore: boolean; done: boolean };
+
+/**
+ * Where a flight is: the first hole (in play order) that is not done for every player.
+ * A hole is done for a player when the score is confirmed (validated / marshal) or OUT.
+ * `stateOf(playerId, hole)` returns that player's state for the hole.
+ */
+export function flightProgress(
+  startHole: number,
+  playerIds: string[],
+  stateOf: (playerId: string, hole: number) => HoleState,
+) {
+  const order = holeOrder(startHole);
+  let holesDone = 0;
+  let currentHole: number | null = null;
+  for (const hole of order) {
+    const allDone = playerIds.length > 0 && playerIds.every((p) => stateOf(p, hole).done);
+    if (allDone) {
+      holesDone++;
+      continue;
+    }
+    currentHole = hole;
+    break;
+  }
+  const awaitingConfirmation =
+    currentHole !== null &&
+    playerIds.length > 0 &&
+    playerIds.every((p) => stateOf(p, currentHole!).hasScore);
+  const started = playerIds.some((p) => order.some((h) => stateOf(p, h).hasScore));
+  return {
+    order,
+    currentHole, // null = all 18 holes done
+    holesDone,
+    finished: currentHole === null && playerIds.length > 0,
+    awaitingConfirmation, // every player has a score on the current hole, not yet confirmed
+    started,
+  };
+}

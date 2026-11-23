@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { LoadingOverlay, PageLoader, Spinner } from '../components/ui/Loading';
+import { assignFlight, autoGroup, sortedFlights, useGroupingRules } from '../lib/flightRules';
 import { QRCodeCanvas } from 'qrcode.react';
 import { 
   Users, 
@@ -47,7 +48,7 @@ const TournamentPlayers = () => {
   const currentAdminLocation = localStorage.getItem('adminLocation') || 'Padang Golf Sulaiman';
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list');
   const [searchTerm, setSearchTerm] = useState('');
-  const [flightFilter, setFlightFilter] = useState<'ALL' | 'A' | 'B' | 'C'>('ALL');
+  const [flightFilter, setFlightFilter] = useState<string>('ALL');
   const [isFilterResultsView, setIsFilterResultsView] = useState(false);
   const [players, setPlayers] = useState<any[]>([]);
   const [tournamentInfo, setTournamentInfo] = useState<any>(null);
@@ -77,7 +78,7 @@ const TournamentPlayers = () => {
   const [revealedGroups, setRevealedGroups] = useState<Record<number, boolean>>({});
   const [isManualGroupModalOpen, setIsManualGroupModalOpen] = useState(false);
   const [manualGroupSearch, setManualGroupSearch] = useState('');
-  const [manualGroupFlightFilter, setManualGroupFlightFilter] = useState<'ALL' | 'A' | 'B' | 'C'>('ALL');
+  const [manualGroupFlightFilter, setManualGroupFlightFilter] = useState<string>('ALL');
   const [manualGroupsDraft, setManualGroupsDraft] = useState<Array<{ id: string; name: string; playerIds: string[] }>>([]);
   const [manualActiveGroupIndex, setManualActiveGroupIndex] = useState(0);
 
@@ -261,11 +262,15 @@ const TournamentPlayers = () => {
     loadData().finally(() => setPageLoading(false));
   }, []);
 
-  const flights = [
-    { id: 'A', label: 'Flight A', range: 'HCP 1-13', color: 'text-blue-500' },
-    { id: 'B', label: 'Flight B', range: 'HCP 14-21', color: 'text-emerald-500' },
-    { id: 'C', label: 'Flight C', range: 'HCP 22-28', color: 'text-amber-500' },
-  ];
+  // Same configurable rules as Create Tournament (saved in this browser).
+  const [groupingRules] = useGroupingRules();
+  const FLIGHT_COLORS = ['text-blue-500', 'text-emerald-500', 'text-amber-500', 'text-purple-500', 'text-rose-500'];
+  const flights = sortedFlights(groupingRules).map((f, i) => ({
+    id: f.id,
+    label: f.label,
+    range: `HCP ${f.minHcp}-${f.maxHcp}`,
+    color: FLIGHT_COLORS[i % FLIGHT_COLORS.length],
+  }));
 
   const matchesFlightFilter = (p: any) => {
     if (flightFilter === 'ALL') return true;
@@ -307,352 +312,9 @@ const TournamentPlayers = () => {
     .map(k => players.find(p => toPlayerKey(p) === k))
     .filter(Boolean) as any[];
 
-  const shuffleArray = <T,>(items: T[]) => {
-    const arr = [...items];
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-    return arr;
-  };
-
-  const autoGroupPlayers = (playersList: any[]) => {
-    const toKey = (name: string) =>
-      name
-        .trim()
-        .toUpperCase()
-        .replace(/[^A-Z0-9]+/g, '');
-
-    const nameAliases: Record<string, string[]> = {
-      LUKY: ['LUCKY'],
-      IKBAL: ['IQBAL'],
-      EFFENDI: ['EFENDI'],
-      'MANG JP': ['MANG JEPE', 'MANG JEP']
-    };
-
-    const candidateNames = (name: string) => {
-      const key = name.trim().toUpperCase();
-      const aliases = nameAliases[key] || [];
-      return [name, ...aliases];
-    };
-
-    const reservedGroups = [
-      { targetIndex: 6, groupName: 'FLIGHT 7', names: ['MANG JP', 'DYLAN'] },
-      { targetIndex: 7, groupName: 'FLIGHT 8', names: ['ANANG', 'IKBAL', 'EFFENDI', 'BUDIMAN'] },
-      { targetIndex: 8, groupName: 'FLIGHT 9', names: ['JEFRI', 'RIDHO', 'RIZKY', 'LUKY'] }
-    ];
-
-    const playersWithFlight = playersList.map(p => {
-      const hcp = parseInt(p.handicap) || 0;
-      let flight = 'C';
-      if (hcp >= 1 && hcp <= 13) flight = 'A';
-      else if (hcp >= 14 && hcp <= 21) flight = 'B';
-      else if (hcp >= 22) flight = 'C'; // Assuming > 28 is also C or handle as needed
-      return { ...p, flight };
-    });
-
-    const poolAll = [...playersWithFlight];
-    const reservedGroupPlayers = reservedGroups.map((rg) => {
-      const picked: any[] = [];
-      rg.names.forEach((n) => {
-        const candidateKeys = candidateNames(n).map(toKey).filter(Boolean);
-        const idx = poolAll.findIndex((p: any) => {
-          const pKey = toKey(p?.name || '');
-          if (!pKey) return false;
-          return candidateKeys.some((cKey) => cKey && (pKey.includes(cKey) || cKey.includes(pKey)));
-        });
-        if (idx !== -1) {
-          picked.push(poolAll[idx]);
-          poolAll.splice(idx, 1);
-        }
-      });
-      return { ...rg, players: picked };
-    });
-
-    const pullFromPool = (predicate: (p: any) => boolean) => {
-      const idx = poolAll.findIndex(predicate);
-      if (idx === -1) return null;
-      const picked = poolAll[idx];
-      poolAll.splice(idx, 1);
-      return picked;
-    };
-
-    const flight7 = reservedGroupPlayers.find((rg) => rg.groupName === 'FLIGHT 7');
-    if (flight7) {
-      const desiredSize = 4;
-      const hasC = flight7.players.some((p: any) => (p?.flight || '').toString().toUpperCase() === 'C');
-      const currentA = flight7.players.filter((p: any) => (p?.flight || '').toString().toUpperCase() === 'A').length;
-      const currentB = flight7.players.filter((p: any) => (p?.flight || '').toString().toUpperCase() === 'B').length;
-
-      if (hasC) {
-        while (flight7.players.length < desiredSize) {
-          const picked = pullFromPool((p: any) => (p?.flight || '').toString().toUpperCase() === 'C');
-          if (!picked) break;
-          flight7.players.push(picked);
-        }
-      } else {
-        const needed = Math.max(0, Math.min(2, desiredSize - flight7.players.length));
-        if (needed === 1) {
-          const picked =
-            pullFromPool((p: any) => (p?.flight || '').toString().toUpperCase() === 'B') ||
-            pullFromPool((p: any) => (p?.flight || '').toString().toUpperCase() === 'A');
-          if (picked) {
-            const nextA = currentA + ((picked.flight || '').toString().toUpperCase() === 'A' ? 1 : 0);
-            const nextB = currentB + ((picked.flight || '').toString().toUpperCase() === 'B' ? 1 : 0);
-            if (nextB >= nextA) flight7.players.push(picked);
-            else poolAll.push(picked);
-          }
-        }
-        if (needed === 2) {
-          const candidates = shuffleArray(poolAll.filter((p: any) => ['A', 'B'].includes((p?.flight || '').toString().toUpperCase())));
-          let pickedPair: any[] | null = null;
-          const limit = Math.min(80, candidates.length);
-          for (let i = 0; i < limit && !pickedPair; i++) {
-            for (let j = i + 1; j < limit; j++) {
-              const aInc =
-                ((candidates[i].flight || '').toString().toUpperCase() === 'A' ? 1 : 0) +
-                ((candidates[j].flight || '').toString().toUpperCase() === 'A' ? 1 : 0);
-              const bInc =
-                ((candidates[i].flight || '').toString().toUpperCase() === 'B' ? 1 : 0) +
-                ((candidates[j].flight || '').toString().toUpperCase() === 'B' ? 1 : 0);
-              if (currentB + bInc >= currentA + aInc) {
-                pickedPair = [candidates[i], candidates[j]];
-                break;
-              }
-            }
-          }
-          if (pickedPair) {
-            pickedPair.forEach((pp) => {
-              const idx = poolAll.findIndex((x: any) => x === pp);
-              if (idx !== -1) poolAll.splice(idx, 1);
-            });
-            flight7.players.push(...pickedPair);
-          } else {
-            while (flight7.players.length < desiredSize) {
-              const picked = pullFromPool((p: any) => (p?.flight || '').toString().toUpperCase() === 'B');
-              if (!picked) break;
-              flight7.players.push(picked);
-            }
-          }
-        }
-      }
-    }
-
-    const playersA = shuffleArray(poolAll.filter(p => p.flight === 'A'));
-    const playersB = shuffleArray(poolAll.filter(p => p.flight === 'B'));
-    const playersC = shuffleArray(poolAll.filter(p => p.flight === 'C'));
-
-    const groups: any[][] = [];
-
-    // 1) Group C (C harus terpisah, hanya sesama C) - target 3-4 per group
-    {
-      const pool = [...playersC];
-      const cGroups: any[][] = [];
-
-      while (pool.length > 0) {
-        if (pool.length >= 3 && pool.length % 4 === 2) {
-          cGroups.push(pool.splice(0, 3));
-          continue;
-        }
-        if (pool.length >= 3 && pool.length % 4 === 1) {
-          cGroups.push(pool.splice(0, 3));
-          continue;
-        }
-        if (pool.length >= 4) {
-          cGroups.push(pool.splice(0, 4));
-          continue;
-        }
-        cGroups.push(pool.splice(0, pool.length));
-      }
-
-      const smallIdx = cGroups.findIndex(g => g.length > 0 && g.length < 3);
-      if (smallIdx !== -1) {
-        const donorIdx = cGroups.findIndex(g => g.length === 4);
-        if (donorIdx !== -1) {
-          const moved = cGroups[donorIdx].pop();
-          cGroups[smallIdx].push(moved);
-        }
-      }
-
-      cGroups.forEach(g => groups.push(g));
-    }
-
-    // 2) Group A & B (A dan B boleh campur)
-    // RULE: Jumlah Flight B tidak boleh lebih sedikit dari Flight A (B >= A)
-    {
-      const poolA = [...playersA];
-      const poolB = [...playersB];
-
-      const take = (pool: any[], n: number) => pool.splice(0, n);
-      const pushGroup = (g: any[]) => groups.push(g);
-
-      while (poolA.length + poolB.length >= 3) {
-        if (poolA.length + poolB.length >= 4) {
-          if (poolA.length >= 1 && poolB.length >= 3) {
-            pushGroup([...take(poolA, 1), ...take(poolB, 3)]);
-            continue;
-          }
-          if (poolA.length >= 2 && poolB.length >= 2) {
-            pushGroup([...take(poolA, 2), ...take(poolB, 2)]);
-            continue;
-          }
-          if (poolB.length >= 4) {
-            pushGroup(take(poolB, 4));
-            continue;
-          }
-        }
-
-        if (poolA.length >= 1 && poolB.length >= 2) {
-          pushGroup([...take(poolA, 1), ...take(poolB, 2)]);
-          continue;
-        }
-        if (poolB.length >= 3) {
-          pushGroup(take(poolB, 3));
-          continue;
-        }
-        break;
-      }
-
-      const leftovers = [...poolB, ...poolA];
-      if (leftovers.length > 0 && groups.length > 0) {
-        const canAdd = (g: any[], p: any) => {
-          if (g.length >= 4) return false;
-          const next = [...g, p];
-          const a = next.filter(x => x.flight === 'A').length;
-          const b = next.filter(x => x.flight === 'B').length;
-          if (a > 0 && b > 0 && b < a) return false;
-          return true;
-        };
-
-        const unplaced: any[] = [];
-        leftovers.forEach((p) => {
-          const idx = groups.findIndex((g) => g[0]?.flight !== 'C' && canAdd(g, p));
-          if (idx !== -1) {
-            groups[idx].push(p);
-          } else {
-            unplaced.push(p);
-          }
-        });
-
-        if (unplaced.length > 0) {
-          groups.push(unplaced);
-        }
-      }
-    }
-
-    {
-      const countAB = (g: any[]) => {
-        const a = g.filter(p => p.flight === 'A').length;
-        const b = g.filter(p => p.flight === 'B').length;
-        return { a, b };
-      };
-
-      const isValidAB = (g: any[]) => {
-        const { a, b } = countAB(g);
-        if (a > 0 && b > 0 && b < a) return false;
-        return true;
-      };
-
-      const isCGroup = (g: any[]) => g.length > 0 && g.every(p => p.flight === 'C');
-
-      for (let i = 0; i < groups.length; i++) {
-        const g = groups[i];
-        if (isCGroup(g)) continue;
-        if (g.length >= 3) continue;
-
-        for (let j = 0; j < groups.length && g.length < 3; j++) {
-          if (i === j) continue;
-          const donor = groups[j];
-          if (isCGroup(donor)) continue;
-          if (donor.length !== 4) continue;
-
-          const tryMoveIndex = donor.findIndex((p: any, idx: number) => {
-            const donorAfter = donor.filter((_: any, i2: number) => i2 !== idx);
-            const receiverAfter = [...g, p];
-            return isValidAB(donorAfter) && isValidAB(receiverAfter);
-          });
-
-          if (tryMoveIndex !== -1) {
-            const [moved] = donor.splice(tryMoveIndex, 1);
-            g.push(moved);
-          }
-        }
-      }
-
-      for (let i = 0; i < groups.length; i++) {
-        const g = groups[i];
-        if (!isCGroup(g)) continue;
-        if (g.length >= 3) continue;
-
-        const donorIdx = groups.findIndex((d) => isCGroup(d) && d.length === 4);
-        if (donorIdx !== -1) {
-          const moved = groups[donorIdx].pop();
-          g.push(moved);
-        }
-      }
-    }
-
-    {
-      const countAB = (g: any[]) => {
-        const a = g.filter(p => p.flight === 'A').length;
-        const b = g.filter(p => p.flight === 'B').length;
-        return { a, b };
-      };
-
-      const isBadAB = (g: any[]) => {
-        const { a, b } = countAB(g);
-        if (a === 0 || b === 0) return false;
-        return b < a;
-      };
-
-      for (let i = 0; i < groups.length; i++) {
-        const g = groups[i];
-        if (g[0]?.flight === 'C') continue;
-        if (!isBadAB(g)) continue;
-
-        const aIdx = g.findIndex(p => p.flight === 'A');
-        if (aIdx === -1) continue;
-
-        let fixed = false;
-        for (let j = 0; j < groups.length; j++) {
-          if (j === i) continue;
-          const donor = groups[j];
-          if (donor[0]?.flight === 'C') continue;
-
-          const bIdx = donor.findIndex(p => p.flight === 'B');
-          if (bIdx === -1) continue;
-
-          const swappedG = [...g];
-          const swappedDonor = [...donor];
-          const aPlayer = swappedG[aIdx];
-          const bPlayer = swappedDonor[bIdx];
-          swappedG[aIdx] = bPlayer;
-          swappedDonor[bIdx] = aPlayer;
-
-          if (!isBadAB(swappedG) && !isBadAB(swappedDonor)) {
-            groups[i] = swappedG;
-            groups[j] = swappedDonor;
-            fixed = true;
-            break;
-          }
-        }
-
-        if (!fixed) {
-          continue;
-        }
-      }
-    }
-
-    reservedGroupPlayers
-      .sort((a, b) => a.targetIndex - b.targetIndex)
-      .forEach((rg) => {
-        if (!rg.players?.length) return;
-        const idx = Math.min(Math.max(0, rg.targetIndex), groups.length);
-        groups.splice(idx, 0, rg.players);
-      });
-
-    return groups;
-  };
+  // Players that must play together are now configured as "Grup tetap" in the grouping rules
+  // (they used to be hardcoded names from a past event).
+  const autoGroupPlayers = (playersList: any[]) => autoGroup(playersList, groupingRules).groups;
 
 
   const deletePlayer = (id: number) => {
@@ -1319,7 +981,7 @@ const TournamentPlayers = () => {
                 <button
                   key={f.id}
                   onClick={() => {
-                    setFlightFilter(f.id as 'A' | 'B' | 'C');
+                    setFlightFilter(f.id);
                     setIsAllGroupsView(false);
                     setActiveGroupIndex(0);
                     setIsFilterResultsView(true);
@@ -2241,10 +1903,7 @@ const TournamentPlayers = () => {
                     value={editingPlayer.handicap || ''}
                     onChange={(e) => {
                       const val = e.target.value.replace(/[^0-9]/g, '');
-                      const hcp = parseInt(val) || 0;
-                      let flight = 'C';
-                      if (hcp >= 1 && hcp <= 13) flight = 'A';
-                      else if (hcp >= 14 && hcp <= 21) flight = 'B';
+                      const flight = assignFlight(val, groupingRules);
                       setEditingPlayer({...editingPlayer, handicap: val, flight});
                     }}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 transition-all font-bold text-slate-700"

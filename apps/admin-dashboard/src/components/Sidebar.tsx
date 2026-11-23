@@ -191,6 +191,14 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
               <div className="w-1.5 h-1.5 rounded-full bg-amber-400 group-hover:scale-150 transition-transform shadow-[0_0_8px_rgba(251,191,36,0.5)]"></div>
               Live Score
             </Link>
+
+            <Link 
+              to="/admin/rounds/flight-tracker" 
+              className="p-2.5 text-[11px] text-slate-300 hover:text-white hover:bg-white/10 rounded-xl transition-all font-bold tracking-wide flex items-center gap-3 group"
+            >
+              <div className="w-1.5 h-1.5 rounded-full bg-sky-400 group-hover:scale-150 transition-transform shadow-[0_0_8px_rgba(56,189,248,0.5)]"></div>
+              Flight Tracker
+            </Link>
           </div>
         </SidebarItem>
 
